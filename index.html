@@ -106,7 +106,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 
 /* drawer */
 .drawer-bg { position: fixed; inset: 0; background: rgba(42,30,32,.35); z-index: 20; }
-.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 760px; max-width: 100vw; background: var(--surface); border-left: 1px solid var(--border); z-index: 21; overflow-y: auto; padding: 22px 24px; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(760px, 100vw); background: var(--surface); border-left: 1px solid var(--border); z-index: 21; overflow-y: auto; padding: 22px 24px; }
 .drawer h2 { margin-bottom: 4px; }
 .drawer .x { position: absolute; top: 14px; right: 16px; }
 
@@ -149,7 +149,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "1.11";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "1.13";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -573,6 +573,11 @@ function LeadBuilders({ lead, reload }) {
     setDocs(data ?? []);
   }, [lead.ghl_id]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const ch = new BroadcastChannel("solonos");
+    ch.onmessage = (m) => { if (m.data?.type === "builder-saved" && m.data.lead === lead.ghl_id) { load(); reload?.(); } };
+    return () => ch.close();
+  }, [lead.ghl_id, load]);
   const open = async (path) => window.open(await signedUrl(path), "_blank");
   async function upload(file) {
     await run(async () => {
@@ -1327,6 +1332,11 @@ function NotesCard({ e, contact, reload }) {
     setVb(d ?? []);
   }, [e.id, e.opportunity_id]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const ch = new BroadcastChannel("solonos");
+    ch.onmessage = (m) => { if (m.data?.type === "builder-saved" && (m.data.eng === e.id || (m.data.lead && m.data.lead === e.opportunity_id))) load(); };
+    return () => ch.close();
+  }, [e.id, e.opportunity_id, load]);
   const open = async (path) => window.open(await signedUrl(path), "_blank");
   const addFathom = () => run(async () => {
     const { error } = await supabase.from("call_recordings").insert({ opportunity_id: e.opportunity_id, call_no: callNo, fathom_url: fathom, recorded_at: new Date().toISOString() });
@@ -1402,6 +1412,7 @@ function Invoices({ invoices, reload }) {
                 <td>
                   <div>{INVOICE_NAMES[i.seq]}</div>
                   <div className="muted small">{i.invoice_no ? `${i.issuing_entity}-${String(i.invoice_no).padStart(4, "0")}` : "not yet issued"}{i.due_at && ` · due ${day(i.due_at)}`}</div>
+                  {i.client_claimed_at && i.status === "issued" && <div className="small" style={{ color: "var(--accent)", fontWeight: 600 }}>Client reports payment {ago(i.client_claimed_at)}{i.client_reference && ` · ref ${i.client_reference}`}. Check the bank, then Mark paid.</div>}
                 </td>
                 <td style={{ textAlign: "right" }}>{money(i.amount, i.currency)}</td>
                 <td style={{ textAlign: "right" }}>
@@ -1434,6 +1445,7 @@ function describe(f, who = "Client") {
     case "nda.sent": return `NDA v${d.version} generated and emailed for signature`;
     case "letter.sent": return `Engagement letter v${d.version} emailed (fee ${eur(d.fee)})`;
     case "deposit.claimed": return `${who} says the deposit is paid${d.reference ? ` (ref ${d.reference})` : ""}`;
+    case "invoice.claimed": return `${who} reports payment of ${INVOICE_NAMES[d.seq]}${d.reference ? ` (ref ${d.reference})` : ""}`;
     case "client.company_updated": return `${who} updated their company details`;
     case "client.company_confirmed": return `${who} confirmed their company details`;
     case "letter.drafted": return `Engagement letter draft v${d.version} created for review (fee ${eur(d.fee)})`;
@@ -1743,7 +1755,7 @@ function Portal({ session }) {
             {letter ? (<><AgreementView agreement={letter} /><div style={{ height: 16 }} /><SignBox agreement={letter} e={e} onSigned={load} label="engagement letter" preview={preview} /></>) : <Empty title="Not sent yet">We'll email you when the engagement letter is ready.</Empty>}
           </>
         )}
-        {current === "invoices" && <FilesStep e={e} invoices={invoices} shared={shared} feed={feed} docs={docs} project={project} overview={overviewMode} />}
+        {current === "invoices" && <FilesStep e={e} invoices={invoices} shared={shared} feed={feed} docs={docs} project={project} overview={overviewMode} reload={load} preview={preview} />}
       </main>
     </div>
   );
@@ -1950,7 +1962,24 @@ function ProgressLine({ e, project }) {
   );
 }
 
-function FilesStep({ e, invoices, shared, feed, docs, project, overview }) {
+function ClaimPayment({ inv, reload, preview }) {
+  const [run, busy] = useAction();
+  const [open, setOpen] = useState(false);
+  const [ref, setRef] = useState("");
+  const claim = () => run(() => rpc("portal_claim_invoice_paid", { p_invoice: inv.id, p_reference: ref || null }).then(reload), "Thank you, we'll confirm once it lands");
+  if (inv.status === "paid") return null;
+  if (inv.client_claimed_at) return <Chip kind="accent">payment reported</Chip>;
+  if (!open) return <button className="btn" disabled={preview} onClick={() => setOpen(true)}>Mark payment</button>;
+  return (
+    <span className="row">
+      <input placeholder="Bank reference" value={ref} onChange={(x) => setRef(x.target.value)} style={{ padding: 6, borderRadius: 8, border: "1px solid var(--border)", width: 150 }} />
+      <button className="btn primary" disabled={busy} onClick={claim}>Sent</button>
+      <button className="btn" onClick={() => setOpen(false)}>✕</button>
+    </span>
+  );
+}
+
+function FilesStep({ e, invoices, shared, feed, docs, project, overview, reload, preview }) {
   const open = async (path) => window.open(await signedUrl(path), "_blank");
   return (
     <>
@@ -1962,14 +1991,15 @@ function FilesStep({ e, invoices, shared, feed, docs, project, overview }) {
             <table className="table"><tbody>
               {invoices.map((i) => (
                 <tr key={i.id}>
-                  <td>{INVOICE_NAMES[i.seq]}<div className="muted small">{i.issuing_entity}-{String(i.invoice_no).padStart(4, "0")}{i.due_at && ` · due ${day(i.due_at)}`}</div></td>
+                  <td>{INVOICE_NAMES[i.seq]}<div className="muted small">{i.issuing_entity}-{String(i.invoice_no).padStart(4, "0")}{i.due_at && ` · due ${day(i.due_at)}`}{i.client_reference && ` · ref ${i.client_reference}`}</div></td>
                   <td style={{ textAlign: "right" }}>{money(i.amount, i.currency)}</td>
                   <td style={{ textAlign: "right" }}><Chip kind={i.status === "paid" ? "ok" : "warn"}>{i.status}</Chip></td>
-                  <td style={{ textAlign: "right" }}><span className="row" style={{ justifyContent: "flex-end" }}>{i.pdf_path && <button className="btn" onClick={() => open(i.pdf_path)}>Invoice</button>}{i.receipt_path && <button className="btn" onClick={() => open(i.receipt_path)}>Receipt</button>}</span></td>
+                  <td style={{ textAlign: "right" }}><span className="row" style={{ justifyContent: "flex-end" }}>{i.pdf_path && <button className="btn" onClick={() => open(i.pdf_path)}>Invoice</button>}{i.receipt_path && <button className="btn" onClick={() => open(i.receipt_path)}>Receipt</button>}<ClaimPayment inv={i} reload={reload} preview={preview} /></span></td>
                 </tr>
               ))}
             </tbody></table>
           )}
+          {invoices.some((i) => i.status === "issued") && <p className="muted small" style={{ margin: "8px 0 0" }}>Paid by bank transfer? Click Mark payment and add your reference; we confirm and send the receipt.</p>}
         </Card>
         <Card title="Shared files">
           <h3 style={{ marginBottom: 6 }}>From Consortia</h3>
@@ -2062,6 +2092,26 @@ function Shell({ session, staff, signOut }) {
   );
 }
 
+function NewVersionBanner() {
+  const [latest, setLatest] = useState(null);
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const t = await (await fetch(`/index.html?fresh=${Date.now()}`, { cache: "no-store" })).text();
+        const m = t.match(/APP_VERSION = "([^"]+)"/);
+        if (m && m[1] !== APP_VERSION) setLatest(m[1]);
+      } catch (_) {}
+    };
+    check(); const id = setInterval(check, 5 * 60 * 1000); return () => clearInterval(id);
+  }, []);
+  if (!latest) return null;
+  return (
+    <div style={{ position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 60, background: "var(--accent)", color: "var(--on)", padding: "8px 14px", borderRadius: 10, fontSize: 13, boxShadow: "0 6px 24px rgba(0,0,0,.2)" }}>
+      Solonos {latest} is available (you have {APP_VERSION}). <button onClick={() => window.location.reload(true)} style={{ marginLeft: 8, background: "var(--on)", color: "var(--accent)", border: 0, borderRadius: 6, padding: "4px 10px", fontWeight: 600, cursor: "pointer" }}>Reload</button>
+    </div>
+  );
+}
+
 function App() {
   const [session, setSession] = useState(undefined);
   const [staff, setStaff] = useState(null);
@@ -2105,6 +2155,7 @@ function App() {
 
   return (
     <ToastProvider>
+      <NewVersionBanner />
       <Shell session={session} staff={staff} signOut={() => logout("/")} />
     </ToastProvider>
   );

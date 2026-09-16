@@ -168,6 +168,7 @@ if (session) {
       const { error: e2 } = await supabase.from("documents").insert(row);
       if (e2) throw new Error(e2.message);
       status("Saved to Solonos ✓ (" + (await blobPages(blob)) + " pages)");
+      try { new BroadcastChannel("solonos").postMessage({ type: "builder-saved", lead: lead || null, eng: eng || null }); } catch (_) {}
     } catch (e) { status("Save failed: " + e.message); }
     btn.disabled = false;
   }
