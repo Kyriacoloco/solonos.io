@@ -148,7 +148,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "1.4";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "1.6";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -502,22 +502,63 @@ function Intake({ custom, title = "Intake form" }) {
   );
 }
 
-/** Your own notes on the lead (calls, objections). Copied into the engagement when you convert. */
-function LeadNotes({ lead }) {
+/** Notes log: many per lead/engagement, each with its date, add or edit any time. Lead notes follow the lead into the engagement. */
+function NotesLog({ opportunityId, engagementId, title = "My notes" }) {
   const [run, busy] = useAction();
-  const [notes, setNotes] = useState("");
-  const [saved, setSaved] = useState("");
-  useEffect(() => { supabase.from("opportunities").select("staff_notes").eq("ghl_id", lead.ghl_id).maybeSingle().then(({ data }) => { setNotes(data?.staff_notes ?? ""); setSaved(data?.staff_notes ?? ""); }); }, [lead.ghl_id]);
-  const save = () => run(async () => {
-    const { error } = await supabase.from("opportunities").update({ staff_notes: notes }).eq("ghl_id", lead.ghl_id);
+  const [notes, setNotes] = useState([]);
+  const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(null);   // { id, body }
+  const load = useCallback(async () => {
+    let qy = supabase.from("lead_notes").select("*").order("created_at");
+    qy = engagementId ? qy.or(`engagement_id.eq.${engagementId}${opportunityId ? `,opportunity_id.eq.${opportunityId}` : ""}`) : qy.eq("opportunity_id", opportunityId);
+    const { data } = await qy;
+    const seen = new Set(); setNotes((data ?? []).filter((n) => !seen.has(n.id) && seen.add(n.id)));
+  }, [opportunityId, engagementId]);
+  useEffect(() => { load(); }, [load]);
+  const add = () => run(async () => {
+    const { data: me } = await supabase.auth.getUser();
+    const { error } = await supabase.from("lead_notes").insert({ opportunity_id: opportunityId ?? null, engagement_id: engagementId ?? null, body: draft.trim(), author: me?.user?.email ?? "staff" });
     if (error) throw new Error(error.message);
-    setSaved(notes);
-  }, "Notes saved");
+    setDraft(""); await load();
+  }, "Note posted");
+  const save = () => run(async () => {
+    const { error } = await supabase.from("lead_notes").update({ body: editing.body.trim() }).eq("id", editing.id);
+    if (error) throw new Error(error.message);
+    setEditing(null); await load();
+  }, "Note updated");
+  const remove = (id) => run(async () => {
+    if (!window.confirm("Delete this note?")) return;
+    const { error } = await supabase.from("lead_notes").delete().eq("id", id);
+    if (error) throw new Error(error.message);
+    await load();
+  });
+  const box = { width: "100%", padding: 8, borderRadius: 8, border: "1px solid var(--border)", font: "inherit" };
   return (
     <div style={{ marginTop: 22 }}>
-      <h3>My notes</h3>
-      <textarea rows={5} value={notes} onChange={(x) => setNotes(x.target.value)} placeholder="What they said on the call, objections, what they want. Goes with the lead into the engagement." style={{ width: "100%", marginTop: 6, padding: 8, borderRadius: 8, border: "1px solid var(--border)", font: "inherit" }} />
-      <div className="row" style={{ marginTop: 6 }}><button className="btn" disabled={busy || notes === saved} onClick={save}>{notes === saved ? "Saved" : "Save notes"}</button></div>
+      <h3>{title}</h3>
+      <div className="stack" style={{ gap: 8, margin: "8px 0" }}>
+        {notes.length === 0 && <span className="muted small">No notes yet.</span>}
+        {notes.map((n) => (
+          <div key={n.id} className="card" style={{ padding: "10px 12px" }}>
+            {editing?.id === n.id ? (
+              <div className="stack">
+                <textarea rows={3} value={editing.body} onChange={(x) => setEditing({ ...editing, body: x.target.value })} style={box} />
+                <div className="row"><button className="btn primary" disabled={busy || !editing.body.trim()} onClick={save}>Save</button><button className="btn" onClick={() => setEditing(null)}>Cancel</button></div>
+              </div>
+            ) : (
+              <>
+                <div className="small" style={{ whiteSpace: "pre-wrap" }}>{n.body}</div>
+                <div className="row between" style={{ marginTop: 6 }}>
+                  <span className="muted small">{day(n.created_at)}{n.updated_at !== n.created_at ? " · edited" : ""}</span>
+                  <span className="row"><button className="btn link small" onClick={() => setEditing({ id: n.id, body: n.body })}>Edit</button><button className="btn link small" onClick={() => remove(n.id)}>Delete</button></span>
+                </div>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      <textarea rows={3} value={draft} onChange={(x) => setDraft(x.target.value)} placeholder="Add a note: what they said, objections, what they want…" style={box} />
+      <div className="row" style={{ marginTop: 6 }}><button className="btn primary" disabled={busy || !draft.trim()} onClick={add}>Post note</button></div>
     </div>
   );
 }
@@ -612,11 +653,11 @@ function ConvertForm({ lead, onCancel }) {
       nav(`/app/engagements/${e.id}`);
     });
   }
-  const ready = f.client_name && f.client_email && (!f.deposit || f.company_country);
+  const ready = f.client_name && f.client_email;
   return (
     <div className="stack">
       <h3>Convert to engagement</h3>
-      <p className="muted small" style={{ margin: 0 }}>The client completes address, registration number and industry on their own page. You send the invitation from the next screen.</p>
+      <p className="muted small" style={{ margin: 0 }}>Only the name and email are needed. The client completes the company details on their own page; everything else follows from that.</p>
       <Field label="Signatory full name (as it will appear on the NDA and letter)"><input value={f.client_name} onChange={set("client_name")} /></Field>
       <div className="grid2">
         <Field label="Title"><input value={f.client_title} onChange={set("client_title")} placeholder="Director" /></Field>
@@ -625,11 +666,11 @@ function ConvertForm({ lead, onCancel }) {
       <label className="check"><input type="checkbox" checked={f.is_individual} onChange={set("is_individual")} />Contracting as an individual, not a company</label>
       <div className="grid2">
         {!f.is_individual && <Field label="Company name"><input value={f.company_name} onChange={set("company_name")} /></Field>}
-        <Field label={`Country${f.deposit ? " (needed for the deposit invoice)" : " (optional)"}`}><input value={f.company_country} onChange={set("company_country")} placeholder="e.g. United Kingdom" /></Field>
+        <Field label="Country (optional, the client confirms it)"><input value={f.company_country} onChange={set("company_country")} placeholder="e.g. United Kingdom" /></Field>
       </div>
       <div className="card" style={{ padding: 12, background: "var(--sunken)" }}>
         <label className="check" style={{ fontWeight: 600 }}><input type="checkbox" checked={f.deposit} onChange={set("deposit")} />Take a €1,000 deposit</label>
-        <div className="muted small" style={{ marginTop: 4 }}>{f.deposit ? "The deposit invoice goes out with the invitation and is credited against Invoice 1." : "No deposit. Invoice 1 will be the full first instalment (50%, capped at €5,000)."}</div>
+        <div className="muted small" style={{ marginTop: 4 }}>{f.deposit ? (f.company_country ? "The deposit invoice goes out with the invitation and is credited against Invoice 1." : "The deposit invoice is issued as soon as the client confirms their country (it decides which company invoices), and is credited against Invoice 1.") : "No deposit. Invoice 1 will be the full first instalment (50%, capped at €5,000)."}</div>
       </div>
       <div className="grid2">
         <Field label="Fee agreed on the call (EUR, no VAT)"><input type="number" min="0" step="100" value={f.fee} onChange={set("fee")} placeholder="e.g. 5000" /></Field>
@@ -742,7 +783,7 @@ function LeadDrawer({ lead, engagement, onClose, reload }) {
       ) : (
         <button className="btn primary" onClick={() => setConvert(true)}>Convert to engagement</button>
       )}
-      <LeadNotes lead={lead} />
+      <NotesLog opportunityId={lead.ghl_id} />
     </Drawer>
   );
 }
@@ -1276,8 +1317,6 @@ const entityFor = (c = "") => ["gb", "uk", "gbr", "united kingdom", "great brita
 
 function NotesCard({ e, contact, reload }) {
   const [run, busy] = useAction();
-  const [edit, setEdit] = useState(false);
-  const [notes, setNotes] = useState(e.staff_notes ?? "");
   const [recs, setRecs] = useState([]);
   const [fathom, setFathom] = useState(""); const [callNo, setCallNo] = useState(1);
   const [vb, setVb] = useState([]);
@@ -1288,11 +1327,6 @@ function NotesCard({ e, contact, reload }) {
   }, [e.id, e.opportunity_id]);
   useEffect(() => { load(); }, [load]);
   const open = async (path) => window.open(await signedUrl(path), "_blank");
-  const save = () => run(async () => {
-    const { error } = await supabase.from("engagements").update({ staff_notes: notes }).eq("id", e.id);
-    if (error) throw new Error(error.message);
-    await reload(); setEdit(false);
-  }, "Notes saved");
   const addFathom = () => run(async () => {
     const { error } = await supabase.from("call_recordings").insert({ opportunity_id: e.opportunity_id, call_no: callNo, fathom_url: fathom, recorded_at: new Date().toISOString() });
     if (error) throw new Error(error.message);
@@ -1309,7 +1343,7 @@ function NotesCard({ e, contact, reload }) {
     }, "Valuation Builder PDF attached and visible to the client");
   }
   return (
-    <Card title="Lead information" right={<button className="btn" onClick={() => setEdit(!edit)}>{edit ? "Cancel" : "Edit notes"}</button>}>
+    <Card title="Lead information">
       <div className="stack" style={{ gap: 14 }}>
         {contact?.custom && Object.keys(contact.custom).length > 0 && <div><Intake custom={contact.custom} title="From the intake form" /></div>}
 
@@ -1339,17 +1373,7 @@ function NotesCard({ e, contact, reload }) {
           </div>
         </div>
 
-        <div>
-          <h3 style={{ marginBottom: 6 }}>Notes (calls, objections, anything useful)</h3>
-          {edit ? (
-            <div className="stack">
-              <textarea rows={6} value={notes} onChange={(x) => setNotes(x.target.value)} placeholder="e.g. Wants to sell in 2 years. Worried about key-person risk." style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid var(--border)", font: "inherit" }} />
-              <div><button className="btn primary" disabled={busy} onClick={save}>Save notes</button></div>
-            </div>
-          ) : (
-            <div className="small" style={{ whiteSpace: "pre-wrap" }}>{e.staff_notes || <span className="muted">No notes yet.</span>}</div>
-          )}
-        </div>
+        <NotesLog opportunityId={e.opportunity_id} engagementId={e.id} title="Notes (calls, objections, anything useful)" />
       </div>
     </Card>
   );

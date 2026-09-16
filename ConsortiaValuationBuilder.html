@@ -104,13 +104,32 @@ if (lead || eng) {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { status("Sign in to Solonos first (same browser), then try again"); return; }
     status("Saving PDF…");
+    // apply the builder's print layout while capturing, so every report page renders (not just the visible tab)
+    const css = document.createElement("style");
+    css.textContent = `
+      html.solonos-capture .no-print { display: none !important; }
+      html.solonos-capture, html.solonos-capture body { background: #fff !important; height: auto !important; overflow: visible !important; }
+      html.solonos-capture .app-root { display: block !important; height: auto !important; background: #fff !important; }
+      html.solonos-capture .report-pane { overflow: visible !important; padding: 0 !important; height: auto !important; }
+      html.solonos-capture #report { width: 794px !important; margin: 0 !important; }
+      html.solonos-capture #report .page { display: block !important; width: 794px !important; min-height: 1123px !important; height: 1123px !important;
+        margin: 0 !important; box-shadow: none !important; overflow: hidden !important; page-break-after: always; break-after: page; }
+      html.solonos-capture #report .page:last-child { page-break-after: auto; break-after: auto; }
+      html.solonos-capture .page-fill { min-height: 1123px !important; }`;
+    document.head.appendChild(css);
+    document.documentElement.classList.add("solonos-capture");
+    window.scrollTo(0, 0);
     try {
-      const target = document.querySelector("main") || document.getElementById("root") || document.body;
+      const target = document.querySelector("#report") || document.getElementById("root") || document.body;
+      await new Promise((r) => setTimeout(r, 300));
       const blob = await html2pdf().set({
-        margin: [8, 8, 8, 8], filename: "Valuation-Builder.pdf",
-        image: { type: "jpeg", quality: 0.95 }, html2canvas: { scale: 2, useCORS: true, ignoreElements: (el) => el.classList && el.classList.contains("no-print") },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }, pagebreak: { mode: ["css", "legacy"] },
+        margin: 0, filename: "Valuation-Builder.pdf",
+        image: { type: "jpeg", quality: 0.95 },
+        html2canvas: { scale: 2, useCORS: true, windowWidth: 794, scrollX: 0, scrollY: 0, ignoreElements: (el) => el.classList && el.classList.contains("no-print") },
+        jsPDF: { unit: "px", format: [794, 1123], orientation: "portrait", hotfixes: ["px_scaling"] },
+        pagebreak: { mode: ["css"], after: ".page" },
       }).from(target).outputPdf("blob");
+      document.documentElement.classList.remove("solonos-capture"); css.remove();
       const stamp = new Date();
       const name = "Valuation Builder - " + stamp.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
       const folder = eng ? eng : ("leads/" + lead);
@@ -123,7 +142,7 @@ if (lead || eng) {
       const { error: e2 } = await supabase.from("documents").insert(row);
       if (e2) throw new Error(e2.message);
       status("Saved to Solonos ✓");
-    } catch (e) { status("Save failed: " + e.message); }
+    } catch (e) { document.documentElement.classList.remove("solonos-capture"); css.remove(); status("Save failed: " + e.message); }
   }
   document.getElementById("solonosSave").addEventListener("click", save);
   const originalPrint = window.print.bind(window);
