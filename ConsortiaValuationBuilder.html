@@ -87,7 +87,8 @@ react-dom/cjs/react-dom-client.production.js:
 </script>
 
 <!-- Solonos hook: when opened from a lead/engagement (?lead=... / ?eng=...), or after picking a lead here, Print also saves the PDF onto that record -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script type="module">
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 const qs = new URLSearchParams(location.search);
@@ -137,6 +138,7 @@ if (session) {
       await new Promise((r) => setTimeout(r, 400));
       const pages = [...document.querySelectorAll("#report .page")];
       if (!pages.length) throw new Error("no report pages found");
+      if (!window.jspdf || !window.html2canvas) throw new Error("PDF libraries did not load; reload the page and try again");
       const { jsPDF } = window.jspdf;
       const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
       for (let i = 0; i < pages.length; i++) {
