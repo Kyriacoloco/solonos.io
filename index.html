@@ -445,6 +445,7 @@ function Leads() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  const [run, moving] = useAction();
 
   if (stages.length === 0) return (
     <>
@@ -460,7 +461,6 @@ function Leads() {
   const inGhl = leads.filter((l) => !engOf(l) || engOf(l).stage === "deposit_pending" || engOf(l).stage === "declined");
   const firstWithLeads = Math.min(...stages.filter((st) => inGhl.some((l) => l.stage_id === st.ghl_id)).map((st) => st.position), Infinity);
   const shownStages = stages.filter((st) => st.position >= firstWithLeads);
-  const [run, moving] = useAction();
   const moveTo = (ghlId, stageId) => run(async () => {
     const { data, error } = await supabase.functions.invoke("ghl-sync", { body: { action: "move", opportunity_id: ghlId, stage_id: stageId } });
     if (error) throw new Error((await error.context?.json?.().catch(() => null))?.error ?? error.message);
