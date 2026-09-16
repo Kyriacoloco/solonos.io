@@ -105,7 +105,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 
 /* drawer */
 .drawer-bg { position: fixed; inset: 0; background: rgba(42,30,32,.35); z-index: 20; }
-.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 460px; max-width: 100vw; background: var(--surface); border-left: 1px solid var(--border); z-index: 21; overflow-y: auto; padding: 22px 24px; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 720px; max-width: 100vw; background: var(--surface); border-left: 1px solid var(--border); z-index: 21; overflow-y: auto; padding: 22px 24px; }
 .drawer h2 { margin-bottom: 4px; }
 .drawer .x { position: absolute; top: 14px; right: 16px; }
 
@@ -148,7 +148,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "1.6";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "1.10";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -596,7 +596,7 @@ function LeadBuilders({ lead, reload }) {
         {docs.length === 0 && <span className="muted small">None yet. Open the builder for this lead, press Print when done: the PDF is saved here automatically. It moves with the lead into the engagement and the client sees it on their page.</span>}
         {docs.map((d) => <div key={d.id} className="row between small"><span>{d.name}<div className="muted">{ago(d.created_at)}</div></span><span className="row"><button className="btn" onClick={() => open(d.storage_path)}>Open</button><button className="btn" disabled={busy} onClick={() => remove(d)}>Remove</button></span></div>)}
         <div className="row">
-          <a className="btn primary" href={`/ConsortiaValuationBuilder.html?lead=${encodeURIComponent(lead.ghl_id)}`} target="_blank" rel="noreferrer">Open Valuation Builder for this lead</a>
+          <a className="btn primary" href={`/ConsortiaValuationBuilder.html?lead=${encodeURIComponent(lead.ghl_id)}&v=${Date.now()}`} target="_blank" rel="noreferrer">Open Valuation Builder for this lead</a>
           <label className="btn" style={{ cursor: "pointer" }}>{busy ? "Uploading…" : "Attach a PDF"}<input type="file" accept=".pdf" style={{ display: "none" }} disabled={busy} onChange={(x) => x.target.files[0] && upload(x.target.files[0])} /></label>
         </div>
       </div>
@@ -1353,7 +1353,7 @@ function NotesCard({ e, contact, reload }) {
             {vb.length === 0 && <span className="muted small">No Valuation Builder attached on the lead. Attach one here; the client sees it on their page.</span>}
             {vb.map((d) => <div key={d.id} className="row between small"><span>{d.name}<div className="muted">{d.opportunity_id ? "from the lead · " : ""}{ago(d.created_at)} · visible to the client</div></span><button className="btn" onClick={() => open(d.storage_path)}>Open</button></div>)}
             <div className="row">
-              <a className="btn" href={`/ConsortiaValuationBuilder.html?eng=${e.id}${e.opportunity_id ? `&lead=${encodeURIComponent(e.opportunity_id)}` : ""}`} target="_blank" rel="noreferrer">Open Valuation Builder for this client</a>
+              <a className="btn" href={`/ConsortiaValuationBuilder.html?eng=${e.id}${e.opportunity_id ? `&lead=${encodeURIComponent(e.opportunity_id)}` : ""}&v=${Date.now()}`} target="_blank" rel="noreferrer">Open Valuation Builder for this client</a>
               <label className="btn" style={{ cursor: "pointer" }}>{busy ? "Uploading…" : "Attach a PDF"}<input type="file" accept=".pdf" style={{ display: "none" }} onChange={(x) => x.target.files[0] && uploadVb(x.target.files[0])} /></label>
             </div>
           </div>
@@ -1406,7 +1406,7 @@ function Invoices({ invoices, reload }) {
                 <td style={{ textAlign: "right" }}>
                   <span className="row" style={{ justifyContent: "flex-end" }}>
                     {i.pdf_path && <button className="btn" onClick={() => open(i.pdf_path)}>PDF</button>}
-                    {!i.pdf_path && i.seq > 0 && i.status !== "void" && <button className="btn primary" disabled={busy} onClick={() => makePdf(i.id)}>Create and send</button>}
+                    {!i.pdf_path && i.seq > 0 && i.status !== "void" && <button className="btn primary" disabled={busy} onClick={() => makePdf(i.id)}>{i.seq === 1 ? "Send again" : "Create and send"}</button>}
                     {i.receipt_path && <button className="btn" onClick={() => open(i.receipt_path)}>Receipt</button>}
                     {i.status === "paid" && !i.receipt_path && <button className="btn" disabled={busy} onClick={() => receipt(i.id)}>Create receipt</button>}
                     {i.status === "issued" && i.seq > 0 ? <button className="btn" disabled={busy} onClick={() => paid(i.id)}>Mark paid</button> : <Chip kind={kind(i.status)}>{i.status}</Chip>}
@@ -1417,7 +1417,7 @@ function Invoices({ invoices, reload }) {
           </tbody>
         </table>
       )}
-      <p className="muted small" style={{ margin: "8px 0 0" }}>Create and send each invoice when it's due; when the transfer lands, Mark paid sends the receipt. The deposit is handled from its own card above.</p>
+      <p className="muted small" style={{ margin: "8px 0 0" }}>Invoice 1 goes out by itself when the letter is signed. Create and send Invoice 2 when the draft is approved. When a transfer lands, Mark paid sends the receipt.</p>
     </Card>
   );
 }
@@ -1454,7 +1454,7 @@ function ValuationBuilder() {
     <div style={{ margin: "-28px -32px -60px", height: "100vh" }}>
       <iframe
         title="Valuation Builder"
-        src="/ConsortiaValuationBuilder.html"
+        src={`/ConsortiaValuationBuilder.html?v=${Date.now()}`}
         style={{ width: "100%", height: "100%", border: 0, display: "block", background: "#fff" }}
       />
     </div>
@@ -1612,7 +1612,7 @@ function SignBox({ agreement, e, onSigned, label, preview }) {
     try { await callFn("engagement-send", { kind: "stamp", agreement_id: agreement.id }); } catch (_) { /* the stamped copy can be produced later by staff */ }
     await onSigned();
   }, `${label} signed. A copy signed by both parties is on its way to your inbox.`);
-  if (agreement.status === "signed") return <div className="note">Signed on {day(agreement.signed_at)}. Thank you. The copy signed by both parties is shown above and has been emailed to you.</div>;
+  if (agreement.status === "signed") return <div className="note">Signed on {day(agreement.signed_at)}. Thank you. {agreement.signed_pdf_path ? "The copy signed by both parties is shown above and has been emailed to you." : "The copy signed by both parties is being prepared; refresh this page in a moment."}</div>;
   return (
     <div className="card" style={{ padding: 16, borderColor: "var(--accent)", maxWidth: 760 }}>
       <h3 style={{ marginBottom: 8 }}>Sign the {label}</h3>
@@ -1851,10 +1851,23 @@ function UploadStep({ e, docs, reload, preview }) {
       await reload();
     }, "Removed. Upload a new file when ready.");
   }
+  async function uploadMany(files) {
+    const list = [...files].filter((f) => f.size <= MAX_MB * 1024 * 1024);
+    if (list.length !== files.length) alert(`Some files were skipped: the limit is ${MAX_MB} MB each.`);
+    await run(async () => {
+      for (const file of list) {
+        const path = `${e.id}/extra-${Date.now()}-${file.name}`;
+        const { error } = await supabase.storage.from("client-uploads").upload(path, file, { upsert: true });
+        if (error) throw new Error(error.message);
+        await rpc("portal_add_upload", { p_engagement: e.id, p_label: file.name, p_storage_path: `client-uploads/${path}` });
+      }
+      await reload();
+    }, `${list.length} file${list.length === 1 ? "" : "s"} uploaded`);
+  }
   const done = docs.filter((d) => d.uploaded_at).length;
   return (
     <>
-      <div className="pagehead"><div><h1>Upload your documents</h1><p>One file per line. Accepted: PDF, Excel (xlsx/xls/csv), Word, PowerPoint, images or a zip, up to {MAX_MB} MB each. Everything is covered by the NDA.</p></div></div>
+      <div className="pagehead"><div><h1>Upload your documents</h1><p>Use the lines below for the documents we asked for, or add several files at once with the button under the list. Accepted: PDF, Excel (xlsx/xls/csv), Word, PowerPoint, images or a zip, up to {MAX_MB} MB each. Everything is covered by the NDA.</p></div></div>
       <Card title="Your documents" right={<span className="muted small">{done}/{docs.length} received</span>} style={{ maxWidth: 760 }}>
         <div className="stack" style={{ gap: 0 }}>
           {docs.map((d) => (
@@ -1870,6 +1883,10 @@ function UploadStep({ e, docs, reload, preview }) {
             </div>
           ))}
           {docs.length === 0 && <span className="muted small">The document list will appear here once we've set it up.</span>}
+        </div>
+        <div className="row" style={{ marginTop: 14 }}>
+          <label className="btn primary" style={{ cursor: preview ? "default" : "pointer", opacity: preview ? .5 : 1 }}>{busy ? "Uploading…" : "Add several files at once"}<input type="file" multiple accept={ACCEPT} style={{ display: "none" }} disabled={preview || busy} onChange={(x) => x.target.files.length && uploadMany(x.target.files)} /></label>
+          <span className="muted small">Select many files in the dialog; each appears as its own line.</span>
         </div>
       </Card>
     </>
