@@ -148,7 +148,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "1.3";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "1.4";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -159,7 +159,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 // ===================== lib/stages.js =====================
 // Engagement stages in order, with what the trainee sees and what unlocks the next one.
 const ENGAGEMENT_STAGES = [
-  { key: "nda_pending",     label: "NDA & deposit sent", next: "docs_pending",     nextLabel: "Move to documents", gate: "NDA signed on the portal (moves on its own)" },
+  { key: "nda_pending",     label: "Invited",            next: "docs_pending",     nextLabel: "Move to documents", gate: "NDA signed on the portal (moves on its own)" },
   { key: "docs_pending",    label: "Documents pending",  next: "review_pending",   nextLabel: "Move to review",    gate: "every required document uploaded (moves on its own)" },
   { key: "review_pending",  label: "Documents in",       next: "proposal",         nextLabel: "Move to proposal",  gate: "nothing; use this when you're preparing the letter" },
   { key: "proposal",        label: "Letter sent",        next: "engaged",          nextLabel: "Move to engaged",   gate: "engagement letter signed and fee set (moves on its own)" },
@@ -480,7 +480,7 @@ function Leads() {
       <Head lastSync={lastSync} count={leads.length} reload={load} />
       <div className="board">
         {shownStages.map((st) => col(st.name, inGhl.filter((l) => l.stage_id === st.ghl_id), st.ghl_id))}
-        {col("NDA & deposit sent", leads.filter((l) => engOf(l) && SENT.includes(engOf(l).stage)))}
+        {col("Invited", leads.filter((l) => engOf(l) && SENT.includes(engOf(l).stage)))}
         {col("Engaged", leads.filter((l) => engOf(l) && ENGAGED.includes(engOf(l).stage)))}
       </div>
       {open && <LeadDrawer lead={open} engagement={engByOpp[open.ghl_id]} onClose={() => setOpen(null)} reload={load} />}
@@ -582,7 +582,7 @@ function LeadCard({ l, eng, onOpen, draggable }) {
   );
 }
 
-/** Convert a lead: everything the NDA and the deposit invoice need, in one form. */
+/** Convert a lead: what you know from the call. The client fills address, tax number and industry on their page. */
 function ConvertForm({ lead, onCancel }) {
   const nav = useNavigate();
   const [run, busy] = useAction();
@@ -592,46 +592,45 @@ function ConvertForm({ lead, onCancel }) {
     client_title: "Director",
     client_email: lead.email ?? "",
     company_name: lead.company ?? "",
-    company_address: "",
-    company_country: lead.country === "CY" ? "Cyprus" : (lead.country ?? ""),
-    company_tax_id: "",
+    company_country: lead.country === "CY" ? "" : (lead.country ?? ""),
     company_industry: Object.entries(c).find(([k]) => /industry/i.test(k))?.[1] ?? "",
     is_individual: false,
+    deposit: true,
     fee: "", approaches: ["dcf", "cca", "pt"],
   });
-  const toggleA = (k) => setF((f) => ({ ...f, approaches: f.approaches.includes(k) ? f.approaches.filter((x) => x !== k) : [...f.approaches, k] }));
   const set = (k) => (x) => setF({ ...f, [k]: x.target.type === "checkbox" ? x.target.checked : x.target.value });
+  const toggleA = (k) => setF((f) => ({ ...f, approaches: f.approaches.includes(k) ? f.approaches.filter((x) => x !== k) : [...f.approaches, k] }));
   async function create() {
     await run(async () => {
-      const e = await rpc("staff_create_engagement", { p_opportunity: lead.ghl_id, p_client_name: f.client_name, p_client_email: f.client_email });
+      const e = await rpc("staff_create_engagement", { p_opportunity: lead.ghl_id, p_client_name: f.client_name, p_client_email: f.client_email, p_deposit: f.deposit });
       const { error } = await supabase.from("engagements").update({
         client_title: f.client_title || null, company_name: f.is_individual ? null : (f.company_name || null),
-        company_address: f.company_address || null, company_country: f.company_country || null,
-        company_tax_id: f.company_tax_id || null, company_industry: f.company_industry || null, is_individual: f.is_individual,
+        company_country: f.company_country || null, company_industry: f.company_industry || null, is_individual: f.is_individual,
         fee: f.fee ? Number(f.fee) : null, approaches: f.approaches,
       }).eq("id", e.id);
       if (error) throw new Error(error.message);
       nav(`/app/engagements/${e.id}`);
     });
   }
-  const ready = f.client_name && f.client_email && f.company_address && f.company_country;
+  const ready = f.client_name && f.client_email && (!f.deposit || f.company_country);
   return (
     <div className="stack">
       <h3>Convert to engagement</h3>
-      <p className="muted small" style={{ margin: 0 }}>These details go on the NDA and the €1,000 deposit invoice. You send them from the next screen.</p>
-      <Field label="Signatory full name (as on the NDA)"><input value={f.client_name} onChange={set("client_name")} /></Field>
+      <p className="muted small" style={{ margin: 0 }}>The client completes address, registration number and industry on their own page. You send the invitation from the next screen.</p>
+      <Field label="Signatory full name (as it will appear on the NDA and letter)"><input value={f.client_name} onChange={set("client_name")} /></Field>
       <div className="grid2">
         <Field label="Title"><input value={f.client_title} onChange={set("client_title")} placeholder="Director" /></Field>
         <Field label="Email (their portal login)"><input type="email" value={f.client_email} onChange={set("client_email")} /></Field>
       </div>
       <label className="check"><input type="checkbox" checked={f.is_individual} onChange={set("is_individual")} />Contracting as an individual, not a company</label>
-      {!f.is_individual && <Field label="Company name"><input value={f.company_name} onChange={set("company_name")} /></Field>}
-      <Field label="Registered address"><textarea rows={2} value={f.company_address} onChange={set("company_address")} placeholder="Street, city, postcode" /></Field>
       <div className="grid2">
-        <Field label="Country (drives NDA law + invoicing entity)"><input value={f.company_country} onChange={set("company_country")} /></Field>
-        <Field label="Registration / tax no. (optional)"><input value={f.company_tax_id} onChange={set("company_tax_id")} /></Field>
+        {!f.is_individual && <Field label="Company name"><input value={f.company_name} onChange={set("company_name")} /></Field>}
+        <Field label={`Country${f.deposit ? " (needed for the deposit invoice)" : " (optional)"}`}><input value={f.company_country} onChange={set("company_country")} placeholder="e.g. United Kingdom" /></Field>
       </div>
-      <Field label="Industry (optional)"><input value={f.company_industry} onChange={set("company_industry")} /></Field>
+      <div className="card" style={{ padding: 12, background: "var(--sunken)" }}>
+        <label className="check" style={{ fontWeight: 600 }}><input type="checkbox" checked={f.deposit} onChange={set("deposit")} />Take a €1,000 deposit</label>
+        <div className="muted small" style={{ marginTop: 4 }}>{f.deposit ? "The deposit invoice goes out with the invitation and is credited against Invoice 1." : "No deposit. Invoice 1 will be the full first instalment (50%, capped at €5,000)."}</div>
+      </div>
       <div className="grid2">
         <Field label="Fee agreed on the call (EUR, no VAT)"><input type="number" min="0" step="100" value={f.fee} onChange={set("fee")} placeholder="e.g. 5000" /></Field>
         <div className="stack" style={{ gap: 4 }}>
@@ -639,8 +638,7 @@ function ConvertForm({ lead, onCancel }) {
           {APPROACHES.map((a) => <label key={a.key} className="check"><input type="checkbox" checked={f.approaches.includes(a.key)} onChange={() => toggleA(a.key)} />{a.label}</label>)}
         </div>
       </div>
-      <div className="note">The engagement letter is generated and sent by itself once the client signs the NDA and confirms their details, using this fee. Leave the fee empty if it isn't agreed yet; you can set it later.</div>
-      <div className="note">Invoiced by: <strong>{entityFor(f.company_country)}</strong>. The client can correct address, country, tax no. and industry on their portal.</div>
+      <div className="note">Invoiced by: <strong>{f.company_country ? entityFor(f.company_country) : "decided by the country the client confirms"}</strong>. The engagement letter is generated with this fee once the client confirms details and signs the NDA.</div>
       <div className="row">
         <button className="btn primary" disabled={!ready || busy} onClick={create}>Create engagement</button>
         <button className="btn" onClick={onCancel}>Cancel</button>
@@ -865,7 +863,7 @@ function EngagementDetail() {
         <div className="stack" style={{ gap: 16 }}>
           <ClientDetails e={e} reload={load} />
           <NotesCard e={e} contact={contact} reload={load} />
-          <DepositCard e={e} deposit={deposit} reload={load} />
+          {e.deposit_required && <DepositCard e={e} deposit={deposit} reload={load} />}
           <Invoices invoices={invoices} deposit={deposit} reload={load} />
           <Card title="Activity">
             {feed.length === 0 ? <span className="muted small">Nothing yet.</span> : (
@@ -943,21 +941,19 @@ function SendNdaStep({ e, agreements, reload }) {
   const nda = agreements.filter((a) => a.kind === "nda" && a.status !== "void").at(-1);
   const stamp = () => run(() => callFn("engagement-send", { kind: "stamp", agreement_id: nda.id, force: true }).then(reload), "Signed copy created and emailed");
   const open = async (path) => window.open(await signedUrl(path), "_blank");
-  const missing = [!e.company_address && "address", !e.company_country && "country"].filter(Boolean);
-  const send = () => run(() => callFn("engagement-send", { engagement_id: e.id, kind: "nda" }).then(reload), "NDA, deposit invoice and portal link sent");
+  const invite = () => run(() => callFn("engagement-send", { engagement_id: e.id, kind: "invite" }).then(reload), e.sent_at ? "Invitation resent" : "Invitation sent");
   return (
     <div className="stack">
+      {e.sent_at ? <div className="small">Invitation sent {day(e.sent_at)}{e.deposit_required ? " with the deposit invoice" : ""}.</div>
+        : <p className="small" style={{ margin: 0 }}>One click emails the client from info@ with the link to their Solonos page{e.deposit_required ? " and the €1,000 deposit invoice" : ""}. They confirm their company details, the NDA is generated for them to sign, then the engagement letter follows.</p>}
       {nda ? (
         <div className="row wrap small">NDA v{nda.version} <Chip kind={nda.status === "signed" ? "ok" : "warn"}>{nda.status}</Chip> sent {day(nda.sent_at)}{nda.signed_at && ` · signed ${day(nda.signed_at)}`}
           {(nda.signed_pdf_path ?? nda.pdf_path) && <button className="btn" onClick={() => open(nda.signed_pdf_path ?? nda.pdf_path)}>Open PDF</button>}
           {nda.status === "signed" && !nda.signed_pdf_path && <button className="btn" disabled={busy} onClick={stamp}>Create signed copy</button>}
         </div>
-      ) : (
-        <p className="small" style={{ margin: 0 }}>One click emails the client from info@: the NDA (filled with their details), the €1,000 deposit invoice, and the link to their Solonos page.</p>
-      )}
-      {missing.length > 0 && <div className="err">Fill in the client's {missing.join(" and ")} (Client details, right) before sending.</div>}
+      ) : e.sent_at ? <div className="muted small">NDA will be generated as soon as the client confirms their company details.</div> : null}
       <div className="row">
-        <button className="btn primary" disabled={busy || missing.length > 0} onClick={send}>{nda ? "Resend NDA + deposit" : "Send NDA + deposit + portal link"}</button>
+        <button className="btn primary" disabled={busy} onClick={invite}>{e.sent_at ? "Resend invitation" : "Send invitation"}</button>
         <a className="btn" href={`${PORTAL_URL}?as=${e.id}`} target="_blank" rel="noreferrer">Preview client's page</a>
       </div>
     </div>
@@ -1068,7 +1064,7 @@ function LetterCard({ e, reload, agreements }) {
             <div className="grid2">
               <Field label="Total fee (EUR, no VAT)"><input type="number" min="0" step="100" value={fee} onChange={(x) => setFee(x.target.value)} /></Field>
               <div className="note" style={{ alignSelf: "end" }}>
-                Invoice 1 on signing: <strong>{eur(Math.max(half - 1000, 0))}</strong> · Invoice 2 before final report: <strong>{eur(Math.max(Number(fee || 0) - half, 0))}</strong> · €1,000 deposit credited
+                Invoice 1 on signing: <strong>{eur(Math.max(half - (e.deposit_required ? 1000 : 0), 0))}</strong> · Invoice 2 before final report: <strong>{eur(Math.max(Number(fee || 0) - half, 0))}</strong>{e.deposit_required && " · €1,000 deposit credited"}
               </div>
             </div>
             <div className="stack" style={{ gap: 6 }}>
@@ -1409,7 +1405,8 @@ function describe(f, who = "Client") {
     case "engagement.created": return "Engagement created from lead";
     case "engagement.stage": return `Moved to ${stageLabel(d.to)}`;
     case "deposit.link_created": return "Stripe deposit link created";
-    case "nda.sent": return `NDA v${d.version} + deposit invoice #${d.invoice} emailed to the client`;
+    case "invite.sent": return `Invitation emailed${d.deposit ? " with the deposit invoice" : ""}`;
+    case "nda.sent": return `NDA v${d.version} generated and emailed for signature`;
     case "letter.sent": return `Engagement letter v${d.version} emailed (fee ${eur(d.fee)})`;
     case "deposit.claimed": return `${who} says the deposit is paid${d.reference ? ` (ref ${d.reference})` : ""}`;
     case "client.company_updated": return `${who} updated their company details`;
@@ -1442,14 +1439,14 @@ function ValuationBuilder() {
 
 
 // ===================== portal (client side) =====================
-const PORTAL_STEPS = [
-  { key: "nda", label: "1. Sign the NDA" },
-  { key: "company", label: "2. Company details" },
-  { key: "docs", label: "3. Upload documents" },
-  { key: "deposit", label: "4. Deposit" },
-  { key: "letter", label: "5. Engagement letter" },
-  { key: "invoices", label: "6. Overview" },
-];
+const portalSteps = (e) => [
+  { key: "company", label: "Company details" },
+  { key: "nda", label: "Sign the NDA" },
+  ...(e.deposit_required ? [{ key: "deposit", label: "Deposit" }] : []),
+  { key: "docs", label: "Upload documents" },
+  { key: "letter", label: "Engagement letter" },
+  { key: "invoices", label: "Overview" },
+].map((st, i) => ({ ...st, label: `${i + 1}. ${st.label}` }));
 const PHASES = [
   { key: "engagement", label: "Engagement" },
   { key: "research", label: "Research" },
@@ -1644,9 +1641,13 @@ function Portal({ session }) {
     setAgreements(a.data ?? []); setDocs(d.data ?? []); setDeposit(dep.data); setInvoices(inv.data ?? []); setShared(sh.data ?? []); setFeed(f.data ?? []);
     const { data: pr } = await supabase.from("projects").select("id, code, stage, started_at, delivered_at").eq("engagement_id", eng.id).maybeSingle();
     setProject(pr ?? null);
-    // the engagement letter goes out by itself once the NDA is signed and the details are confirmed
+    // the NDA is generated once the details are confirmed; the letter once the NDA is signed
+    const ndaExists = (a.data ?? []).some((x) => x.kind === "nda" && ["sent", "signed"].includes(x.status));
     const ndaOk = (a.data ?? []).some((x) => x.kind === "nda" && x.status === "signed");
     const letterExists = (a.data ?? []).some((x) => x.kind === "engagement_letter");
+    if (!previewId && eng.company_confirmed_at && eng.company_address && !ndaExists) {
+      try { await callFn("engagement-send", { engagement_id: eng.id, kind: "nda" }); await load(); return; } catch (_) { /* staff can trigger it */ }
+    }
     if (!previewId && ndaOk && eng.company_confirmed_at && eng.fee && !letterExists) {
       try { await callFn("engagement-send", { engagement_id: eng.id, kind: "letter" }); await load(); } catch (_) { /* staff can send it manually */ }
     }
@@ -1667,15 +1668,16 @@ function Portal({ session }) {
   const letter = agreements.filter((x) => x.kind === "engagement_letter").at(-1);
   const done = {
     nda: nda?.status === "signed",
-    company: !!(e.company_address && e.company_country),
+    company: !!e.company_confirmed_at,
     docs: docs.length > 0 && docs.filter((d) => d.required).every((d) => d.uploaded_at),
-    deposit: ["paid", "credited", "claimed"].includes(deposit?.status),
+    deposit: !e.deposit_required || ["paid", "credited", "claimed"].includes(deposit?.status),
     letter: letter?.status === "signed",
     invoices: true,
   };
+  const STEPS = portalSteps(e);
   const inv1Paid = invoices.some((i) => i.seq === 1 && i.status === "paid");
   const overviewMode = ["valuation_active", "completed"].includes(e.stage) || (e.stage === "engaged" && inv1Paid);
-  const current = overviewMode ? (step ?? "invoices") : (step ?? (!done.nda ? "nda" : !done.company ? "company" : !done.docs ? "docs" : !done.deposit ? "deposit" : letter && !done.letter ? "letter" : "invoices"));
+  const current = overviewMode ? (step ?? "invoices") : (step ?? (!done.company ? "company" : !done.nda ? "nda" : !done.deposit ? "deposit" : !done.docs ? "docs" : letter && !done.letter ? "letter" : "invoices"));
 
   return (
     <div className="shell">
@@ -1688,7 +1690,7 @@ function Portal({ session }) {
             <a href="#" className={current === "nda" ? "active" : ""} onClick={(x) => { x.preventDefault(); setStep("nda"); }}>NDA</a>
             <a href="#" className={current === "letter" ? "active" : ""} onClick={(x) => { x.preventDefault(); setStep("letter"); }}>Engagement letter</a>
           </>
-        ) : PORTAL_STEPS.map((st) => (
+        ) : STEPS.map((st) => (
           <a key={st.key} href="#" className={current === st.key ? "active" : ""} onClick={(x) => { x.preventDefault(); setStep(st.key); }}>
             {st.label}{done[st.key] && st.key !== "invoices" && <span className="soon">✓</span>}
           </a>
@@ -1704,7 +1706,7 @@ function Portal({ session }) {
         {current === "nda" && (
           <>
             <div className="pagehead"><div><h1>Non-Disclosure Agreement</h1><p>Read it below, then sign at the bottom. This is what lets us receive your financial information in confidence.</p></div></div>
-            {nda ? (<><AgreementView agreement={nda} /><div style={{ height: 16 }} /><SignBox agreement={nda} e={e} onSigned={load} label="NDA" preview={preview} /></>) : <Empty title="Not sent yet">We'll email you when the NDA is ready.</Empty>}
+            {nda ? (<><AgreementView agreement={nda} /><div style={{ height: 16 }} /><SignBox agreement={nda} e={e} onSigned={load} label="NDA" preview={preview} /></>) : <Empty title={e.company_confirmed_at ? "Preparing your NDA…" : "First, confirm your company details"}>{e.company_confirmed_at ? "It appears here in a moment; refresh the page if it doesn't." : "The NDA is prepared with the details you confirm in step 1."}</Empty>}
           </>
         )}
         {current === "company" && <CompanyForm e={e} reload={load} preview={preview} />}
