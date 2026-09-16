@@ -148,7 +148,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "1.1";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "1.2";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -460,17 +460,26 @@ function Leads() {
   const inGhl = leads.filter((l) => !engOf(l) || engOf(l).stage === "deposit_pending" || engOf(l).stage === "declined");
   const firstWithLeads = Math.min(...stages.filter((st) => inGhl.some((l) => l.stage_id === st.ghl_id)).map((st) => st.position), Infinity);
   const shownStages = stages.filter((st) => st.position >= firstWithLeads);
-  const col = (title, rows, chip) => (
-    <div className="col" key={title}>
+  const [run, moving] = useAction();
+  const moveTo = (ghlId, stageId) => run(async () => {
+    const { data, error } = await supabase.functions.invoke("ghl-sync", { body: { action: "move", opportunity_id: ghlId, stage_id: stageId } });
+    if (error) throw new Error((await error.context?.json?.().catch(() => null))?.error ?? error.message);
+    if (data?.ok === false) throw new Error(data.error);
+    await load();
+  }, "Moved in GHL");
+  const col = (title, rows, stageId) => (
+    <div className="col" key={title} style={{ opacity: moving ? .7 : 1 }}
+      onDragOver={(ev) => { if (stageId) { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; } }}
+      onDrop={(ev) => { if (!stageId) return; ev.preventDefault(); const id = ev.dataTransfer.getData("text/plain"); if (id) moveTo(id, stageId); }}>
       <h3>{title}<span>{rows.length}</span></h3>
-      {rows.map((l) => <LeadCard key={l.ghl_id} l={l} eng={engOf(l)} onOpen={() => setOpen(l)} />)}
+      {rows.map((l) => <LeadCard key={l.ghl_id} l={l} eng={engOf(l)} onOpen={() => setOpen(l)} draggable={!!stageId} />)}
     </div>
   );
   return (
     <>
       <Head lastSync={lastSync} count={leads.length} reload={load} />
       <div className="board">
-        {shownStages.map((st) => col(st.name, inGhl.filter((l) => l.stage_id === st.ghl_id)))}
+        {shownStages.map((st) => col(st.name, inGhl.filter((l) => l.stage_id === st.ghl_id), st.ghl_id))}
         {col("NDA & deposit sent", leads.filter((l) => engOf(l) && SENT.includes(engOf(l).stage)))}
         {col("Engaged", leads.filter((l) => engOf(l) && ENGAGED.includes(engOf(l).stage)))}
       </div>
@@ -490,6 +499,26 @@ function Intake({ custom, title = "Intake form" }) {
         {rows.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{String(v)}</dd></Fragment>)}
       </dl>
     </>
+  );
+}
+
+/** Your own notes on the lead (calls, objections). Copied into the engagement when you convert. */
+function LeadNotes({ lead }) {
+  const [run, busy] = useAction();
+  const [notes, setNotes] = useState("");
+  const [saved, setSaved] = useState("");
+  useEffect(() => { supabase.from("opportunities").select("staff_notes").eq("ghl_id", lead.ghl_id).maybeSingle().then(({ data }) => { setNotes(data?.staff_notes ?? ""); setSaved(data?.staff_notes ?? ""); }); }, [lead.ghl_id]);
+  const save = () => run(async () => {
+    const { error } = await supabase.from("opportunities").update({ staff_notes: notes }).eq("ghl_id", lead.ghl_id);
+    if (error) throw new Error(error.message);
+    setSaved(notes);
+  }, "Notes saved");
+  return (
+    <div style={{ marginTop: 22 }}>
+      <h3>My notes</h3>
+      <textarea rows={5} value={notes} onChange={(x) => setNotes(x.target.value)} placeholder="What they said on the call, objections, what they want. Goes with the lead into the engagement." style={{ width: "100%", marginTop: 6, padding: 8, borderRadius: 8, border: "1px solid var(--border)", font: "inherit" }} />
+      <div className="row" style={{ marginTop: 6 }}><button className="btn" disabled={busy || notes === saved} onClick={save}>{notes === saved ? "Saved" : "Save notes"}</button></div>
+    </div>
   );
 }
 
@@ -534,13 +563,13 @@ function LeadBuilders({ lead, reload }) {
   );
 }
 
-function LeadCard({ l, eng, onOpen }) {
+function LeadCard({ l, eng, onOpen, draggable }) {
   return (
-    <div className="lead" onClick={onOpen}>
+    <div className="lead" onClick={onOpen} draggable={draggable} onDragStart={(ev) => { ev.dataTransfer.setData("text/plain", l.ghl_id); ev.dataTransfer.effectAllowed = "move"; }}>
       <div className="name">{l.name}</div>
       <div className="meta">
         <span>{l.company || [l.first_name, l.last_name].filter(Boolean).join(" ")}</span>
-        <span>{ago(l.ghl_updated_at)}</span>
+        <span title="Came in">{l.ghl_created_at ? day(l.ghl_created_at) : ago(l.ghl_updated_at)}</span>
       </div>
       <div className="row" style={{ marginTop: 6, gap: 6 }}>
         {l.country && <Chip>{l.country}</Chip>}
@@ -634,7 +663,7 @@ function Head({ lastSync, count, reload }) {
   }
   return (
     <div className="pagehead">
-      <div><h1>Leads</h1><p>Your GHL pipeline, mirrored. Move leads in GHL; they move here within seconds.</p></div>
+      <div><h1>Leads</h1><p>Your GHL pipeline. Drag a card to another column and it moves in GHL too. Convert a lead to start an engagement.</p></div>
       <div className="row">
         <span className="muted small">
           {count != null && `${count} open · `}
@@ -687,6 +716,7 @@ function LeadDrawer({ lead, engagement, onClose, reload }) {
         <dt>Country</dt><dd>{lead.country || "—"}</dd>
         <dt>Source</dt><dd>{lead.source || "—"}</dd>
         <dt>Owner</dt><dd>{lead.assigned_to || "—"}</dd>
+        <dt>Came in</dt><dd>{lead.ghl_created_at ? `${day(lead.ghl_created_at)} (${ago(lead.ghl_created_at)})` : "—"}</dd>
       </dl>
 
       <Intake custom={lead.custom} />
@@ -714,6 +744,7 @@ function LeadDrawer({ lead, engagement, onClose, reload }) {
       ) : (
         <button className="btn primary" onClick={() => setConvert(true)}>Convert to engagement</button>
       )}
+      <LeadNotes lead={lead} />
     </Drawer>
   );
 }
