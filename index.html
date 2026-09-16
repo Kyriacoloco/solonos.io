@@ -148,7 +148,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "1.2";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "1.3";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -552,11 +552,11 @@ function LeadBuilders({ lead, reload }) {
     <>
       <h3>Valuation Builder</h3>
       <div className="stack" style={{ margin: "8px 0 18px", gap: 6 }}>
-        {docs.length === 0 && <span className="muted small">None sent yet. Build it during the call, save the PDF, attach it here. It moves with the lead into the engagement and the client sees it on their page.</span>}
+        {docs.length === 0 && <span className="muted small">None yet. Open the builder for this lead, press Print when done: the PDF is saved here automatically. It moves with the lead into the engagement and the client sees it on their page.</span>}
         {docs.map((d) => <div key={d.id} className="row between small"><span>{d.name}<div className="muted">{ago(d.created_at)}</div></span><span className="row"><button className="btn" onClick={() => open(d.storage_path)}>Open</button><button className="btn" disabled={busy} onClick={() => remove(d)}>Remove</button></span></div>)}
         <div className="row">
-          <a className="btn" href="/app/valuation-builder" target="_blank" rel="noreferrer">Open Valuation Builder</a>
-          <label className="btn primary" style={{ cursor: "pointer" }}>{busy ? "Uploading…" : "Attach PDF"}<input type="file" accept=".pdf" style={{ display: "none" }} disabled={busy} onChange={(x) => x.target.files[0] && upload(x.target.files[0])} /></label>
+          <a className="btn primary" href={`/ConsortiaValuationBuilder.html?lead=${encodeURIComponent(lead.ghl_id)}`} target="_blank" rel="noreferrer">Open Valuation Builder for this lead</a>
+          <label className="btn" style={{ cursor: "pointer" }}>{busy ? "Uploading…" : "Attach a PDF"}<input type="file" accept=".pdf" style={{ display: "none" }} disabled={busy} onChange={(x) => x.target.files[0] && upload(x.target.files[0])} /></label>
         </div>
       </div>
     </>
@@ -1323,8 +1323,8 @@ function NotesCard({ e, contact, reload }) {
             {vb.length === 0 && <span className="muted small">No Valuation Builder attached on the lead. Attach one here; the client sees it on their page.</span>}
             {vb.map((d) => <div key={d.id} className="row between small"><span>{d.name}<div className="muted">{d.opportunity_id ? "from the lead · " : ""}{ago(d.created_at)} · visible to the client</div></span><button className="btn" onClick={() => open(d.storage_path)}>Open</button></div>)}
             <div className="row">
-              <a className="btn" href="/app/valuation-builder" target="_blank" rel="noreferrer">Open Valuation Builder</a>
-              <label className="btn" style={{ cursor: "pointer" }}>{busy ? "Uploading…" : "Attach the PDF from the call"}<input type="file" accept=".pdf" style={{ display: "none" }} onChange={(x) => x.target.files[0] && uploadVb(x.target.files[0])} /></label>
+              <a className="btn" href={`/ConsortiaValuationBuilder.html?eng=${e.id}${e.opportunity_id ? `&lead=${encodeURIComponent(e.opportunity_id)}` : ""}`} target="_blank" rel="noreferrer">Open Valuation Builder for this client</a>
+              <label className="btn" style={{ cursor: "pointer" }}>{busy ? "Uploading…" : "Attach a PDF"}<input type="file" accept=".pdf" style={{ display: "none" }} onChange={(x) => x.target.files[0] && uploadVb(x.target.files[0])} /></label>
             </div>
           </div>
         </div>
