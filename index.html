@@ -63,7 +63,8 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 .stack { display: flex; flex-direction: column; gap: 10px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-@media (max-width: 1100px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .main .grid2, .main .grid3 { grid-template-columns: 1fr; } }
+@media (max-width: 800px) { .drawer .grid2 { grid-template-columns: 1fr; } }
 
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field label { font-size: 12px; color: var(--text-3); }
@@ -105,7 +106,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 
 /* drawer */
 .drawer-bg { position: fixed; inset: 0; background: rgba(42,30,32,.35); z-index: 20; }
-.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 720px; max-width: 100vw; background: var(--surface); border-left: 1px solid var(--border); z-index: 21; overflow-y: auto; padding: 22px 24px; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 760px; max-width: 100vw; background: var(--surface); border-left: 1px solid var(--border); z-index: 21; overflow-y: auto; padding: 22px 24px; }
 .drawer h2 { margin-bottom: 4px; }
 .drawer .x { position: absolute; top: 14px; right: 16px; }
 
@@ -148,7 +149,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "1.10";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "1.11";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
