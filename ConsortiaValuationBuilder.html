@@ -86,52 +86,76 @@ react-dom/cjs/react-dom-client.production.js:
 */
 </script>
 
-<!-- Solonos hook: when opened from a lead/engagement (?lead=... / ?eng=...), Print also saves a PDF onto that record -->
+<!-- Solonos hook: when opened from a lead/engagement (?lead=... / ?eng=...), or after picking a lead here, Print also saves the PDF onto that record -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <script type="module">
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 const qs = new URLSearchParams(location.search);
-const lead = qs.get("lead"), eng = qs.get("eng");
-if (lead || eng) {
-  const supabase = createClient("https://uirbiqfkgnfnfugfclmu.supabase.co", "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl", { auth: { flowType: "implicit" } });
+let lead = qs.get("lead"), eng = qs.get("eng");
+const supabase = createClient("https://uirbiqfkgnfnfugfclmu.supabase.co", "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl", { auth: { flowType: "implicit" } });
+const { data: { session } } = await supabase.auth.getSession();
+if (session) {
   const bar = document.createElement("div");
-  bar.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:99999;background:#800020;color:#FAF3E9;padding:10px 14px;border-radius:10px;font:600 13px Inter,system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.25);display:flex;gap:10px;align-items:center";
   bar.className = "no-print";
-  bar.innerHTML = '<span>Solonos: linked to ' + (eng ? "the engagement" : "the lead") + '</span><button id="solonosSave" style="background:#0C4767;color:#FAF3E9;border:0;border-radius:8px;padding:7px 12px;font:600 12px Inter,sans-serif;cursor:pointer">Save PDF to Solonos</button>';
+  bar.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:99999;background:#800020;color:#FAF3E9;padding:10px 14px;border-radius:10px;font:600 13px Inter,system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.25);display:flex;gap:10px;align-items:center;max-width:520px";
+  const label = document.createElement("span");
+  const pick = document.createElement("select");
+  pick.style.cssText = "padding:6px 8px;border-radius:8px;border:0;font:500 12px Inter,sans-serif;max-width:220px";
+  const btn = document.createElement("button");
+  btn.textContent = "Save PDF to Solonos";
+  btn.style.cssText = "background:#0C4767;color:#FAF3E9;border:0;border-radius:8px;padding:7px 12px;font:600 12px Inter,sans-serif;cursor:pointer";
+  bar.append(label);
+  if (!lead && !eng) {
+    // standalone: let Kyriacos pick the lead here
+    label.textContent = "Solonos: save to lead";
+    pick.innerHTML = '<option value="">Choose a lead…</option>';
+    const { data: leads } = await supabase.from("leads_board").select("ghl_id, name, company").order("ghl_updated_at", { ascending: false });
+    for (const l of leads ?? []) { const o = document.createElement("option"); o.value = l.ghl_id; o.textContent = l.name + (l.company ? " · " + l.company : ""); pick.append(o); }
+    pick.addEventListener("change", () => { lead = pick.value || null; });
+    bar.append(pick);
+  } else {
+    label.textContent = "Solonos: linked to " + (eng ? "the engagement" : "the lead");
+  }
+  bar.append(btn);
   document.body.appendChild(bar);
-  const status = (t) => { bar.firstChild.textContent = t; };
-  async function save() {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) { status("Sign in to Solonos first (same browser), then try again"); return; }
-    status("Saving PDF…");
-    // apply the builder's print layout while capturing, so every report page renders (not just the visible tab)
+  const status = (t) => { label.textContent = t; };
+
+  async function capturePages() {
+    // force the print layout: every report page visible at A4 pixel size, then photograph each one
     const css = document.createElement("style");
     css.textContent = `
       html.solonos-capture .no-print { display: none !important; }
       html.solonos-capture, html.solonos-capture body { background: #fff !important; height: auto !important; overflow: visible !important; }
       html.solonos-capture .app-root { display: block !important; height: auto !important; background: #fff !important; }
       html.solonos-capture .report-pane { overflow: visible !important; padding: 0 !important; height: auto !important; }
-      html.solonos-capture #report { width: 794px !important; margin: 0 !important; }
-      html.solonos-capture #report .page { display: block !important; width: 794px !important; min-height: 1123px !important; height: 1123px !important;
-        margin: 0 !important; box-shadow: none !important; overflow: hidden !important; page-break-after: always; break-after: page; }
-      html.solonos-capture #report .page:last-child { page-break-after: auto; break-after: auto; }
+      html.solonos-capture #report .page { display: block !important; width: 794px !important; height: 1123px !important; min-height: 1123px !important;
+        margin: 0 !important; box-shadow: none !important; overflow: hidden !important; }
       html.solonos-capture .page-fill { min-height: 1123px !important; }`;
     document.head.appendChild(css);
     document.documentElement.classList.add("solonos-capture");
-    window.scrollTo(0, 0);
     try {
-      const target = document.querySelector("#report") || document.getElementById("root") || document.body;
-      await new Promise((r) => setTimeout(r, 300));
-      const blob = await html2pdf().set({
-        margin: 0, filename: "Valuation-Builder.pdf",
-        image: { type: "jpeg", quality: 0.95 },
-        html2canvas: { scale: 2, useCORS: true, windowWidth: 794, scrollX: 0, scrollY: 0, ignoreElements: (el) => el.classList && el.classList.contains("no-print") },
-        jsPDF: { unit: "px", format: [794, 1123], orientation: "portrait", hotfixes: ["px_scaling"] },
-        pagebreak: { mode: ["css"], after: ".page" },
-      }).from(target).outputPdf("blob");
+      await new Promise((r) => setTimeout(r, 400));
+      const pages = [...document.querySelectorAll("#report .page")];
+      if (!pages.length) throw new Error("no report pages found");
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+      for (let i = 0; i < pages.length; i++) {
+        const canvas = await window.html2canvas(pages[i], { scale: 2, useCORS: true, backgroundColor: "#ffffff", width: 794, height: 1123, windowWidth: 794, scrollX: 0, scrollY: 0 });
+        if (i > 0) pdf.addPage();
+        pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, 210, 297);
+      }
+      return pdf.output("blob");
+    } finally {
       document.documentElement.classList.remove("solonos-capture"); css.remove();
-      const stamp = new Date();
-      const name = "Valuation Builder - " + stamp.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+    }
+  }
+
+  async function save() {
+    if (!lead && !eng) { status("Pick a lead first"); return; }
+    status("Saving PDF…"); btn.disabled = true;
+    try {
+      const blob = await capturePages();
+      const name = "Valuation Builder - " + new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
       const folder = eng ? eng : ("leads/" + lead);
       const path = folder + "/" + Date.now() + "-Valuation-Builder.pdf";
       const { error } = await supabase.storage.from("deliverables").upload(path, blob, { contentType: "application/pdf" });
@@ -141,12 +165,14 @@ if (lead || eng) {
       if (lead) row.opportunity_id = lead;
       const { error: e2 } = await supabase.from("documents").insert(row);
       if (e2) throw new Error(e2.message);
-      status("Saved to Solonos ✓");
-    } catch (e) { document.documentElement.classList.remove("solonos-capture"); css.remove(); status("Save failed: " + e.message); }
+      status("Saved to Solonos ✓ (" + (await blobPages(blob)) + " pages)");
+    } catch (e) { status("Save failed: " + e.message); }
+    btn.disabled = false;
   }
-  document.getElementById("solonosSave").addEventListener("click", save);
+  const blobPages = async (b) => { const t = await b.text(); const m = t.match(/\/Type\s*\/Page[^s]/g); return m ? m.length : "?"; };
+  btn.addEventListener("click", save);
   const originalPrint = window.print.bind(window);
-  window.print = async () => { await save(); originalPrint(); };
+  window.print = async () => { if (lead || eng) await save(); originalPrint(); };
 }
 </script>
 </body>
