@@ -94,6 +94,29 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 .step.now { border-top-color: var(--brand); color: var(--brand); font-weight: 600; }
 .step.declined { border-top-color: var(--danger); color: var(--danger); }
 
+/* reports */
+.pills { display: flex; gap: 4px; background: var(--sunken); border: 1px solid var(--border); border-radius: 10px; padding: 3px; }
+.pills button { border: none; background: transparent; color: var(--text-2); padding: 6px 12px; border-radius: 7px; font: 500 12px Inter, sans-serif; cursor: pointer; }
+.pills button.on { background: var(--accent); color: var(--on); font-weight: 600; }
+.stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+@media (max-width: 1100px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.stat .lbl { font-size: 12px; color: var(--muted); }
+.stat .val { font: 600 28px/1.1 Newsreader, serif; margin: 6px 0 4px; }
+.stat .sub { font-size: 12px; color: var(--text-3); }
+.stat.hero { background: var(--accent); border-color: var(--accent); color: var(--on); }
+.stat.hero .lbl, .stat.hero .sub { color: var(--on); opacity: .8; }
+.table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.table tr.total td { font-weight: 700; background: var(--sunken); border-top: 2px solid var(--border); }
+.table td.ghost { color: var(--warn); font-style: italic; }
+.src { font-size: 10px; padding: 1px 7px; border-radius: 9px; color: var(--on); background: var(--text-3); vertical-align: middle; margin-left: 6px; }
+.src.meta { background: var(--accent); } .src.ghl { background: var(--warn); } .src.sol { background: var(--brand); }
+.modal-bg { position: fixed; inset: 0; background: rgba(42,30,32,.35); z-index: 30; display: grid; place-items: center; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; width: min(420px, 92vw); box-shadow: 0 12px 40px rgba(0,0,0,.2); }
+.modal .opts { display: grid; gap: 6px; margin: 14px 0; }
+.modal .opts button { text-align: left; border: 1px solid var(--border); background: var(--sunken); border-radius: 8px; padding: 9px 12px; font: 500 13px Inter, sans-serif; color: var(--text); cursor: pointer; }
+.modal .opts button:hover, .modal .opts button.on { border-color: var(--accent); background: #E6EEF2; }
+
 /* board */
 .board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(230px, 1fr); gap: 12px; overflow-x: auto; padding-bottom: 8px; }
 .col { background: var(--sunken); border-radius: 12px; padding: 10px; min-height: 300px; }
@@ -149,7 +172,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "1.13";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "2.0";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -431,6 +454,7 @@ function Leads() {
   const [engByOpp, setEngByOpp] = useState({});
   const [lastSync, setLastSync] = useState(null);
   const [open, setOpen] = useState(null);
+  const [pendingLost, setPendingLost] = useState(null);   // { id, stageId } waiting for a reason
 
   const load = useCallback(async () => {
     const [s, l, e, sy] = await Promise.all([
@@ -468,10 +492,21 @@ function Leads() {
     if (data?.ok === false) throw new Error(data.error);
     await load();
   }, "Moved in GHL");
+  const isLostStage = (st) => /^lost/i.test(st?.name ?? "");
+  const dropTo = (id, stageId) => {
+    const st = stages.find((x) => x.ghl_id === stageId);
+    if (isLostStage(st)) setPendingLost({ id, stageId });      // ask why first
+    else moveTo(id, stageId);
+  };
+  const lostWithReason = async (reason) => {
+    const { id, stageId } = pendingLost; setPendingLost(null);
+    const ok = await moveTo(id, stageId);
+    if (ok && reason) await run(() => rpc("set_lost_reason", { p_opportunity_id: id, p_reason: reason }).then(load));
+  };
   const col = (title, rows, stageId) => (
     <div className="col" key={title} style={{ opacity: moving ? .7 : 1 }}
       onDragOver={(ev) => { if (stageId) { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; } }}
-      onDrop={(ev) => { if (!stageId) return; ev.preventDefault(); const id = ev.dataTransfer.getData("text/plain"); if (id) moveTo(id, stageId); }}>
+      onDrop={(ev) => { if (!stageId) return; ev.preventDefault(); const id = ev.dataTransfer.getData("text/plain"); if (id) dropTo(id, stageId); }}>
       <h3>{title}<span>{rows.length}</span></h3>
       {rows.map((l) => <LeadCard key={l.ghl_id} l={l} eng={engOf(l)} onOpen={() => setOpen(l)} draggable={!!stageId} />)}
     </div>
@@ -485,7 +520,36 @@ function Leads() {
         {col("Engaged", leads.filter((l) => engOf(l) && ENGAGED.includes(engOf(l).stage)))}
       </div>
       {open && <LeadDrawer lead={open} engagement={engByOpp[open.ghl_id]} onClose={() => setOpen(null)} reload={load} />}
+      {pendingLost && <LostReasonDialog onPick={lostWithReason} onCancel={() => setPendingLost(null)} />}
     </>
+  );
+}
+
+const LOST_REASONS = ["No reply", "Not selling now", "No-show", "Price", "Chose another firm", "Not a fit"];
+
+/** Asked once when a lead is dragged to Lost / Not Now. The reason feeds the "Why lost" column on Reports. */
+function LostReasonDialog({ onPick, onCancel }) {
+  const [pick, setPick] = useState("");
+  useEffect(() => {
+    const k = (e) => e.key === "Escape" && onCancel();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onCancel]);
+  return (
+    <div className="modal-bg" onClick={onCancel}>
+      <div className="modal" role="dialog" aria-label="Why was this lead lost?" onClick={(e) => e.stopPropagation()}>
+        <h2>Why was this lead lost?</h2>
+        <p className="muted small" style={{ margin: "4px 0 0" }}>Shows up on the Reports funnel. You can change it later from the lead.</p>
+        <div className="opts">
+          {LOST_REASONS.map((r) => <button key={r} className={pick === r ? "on" : ""} onClick={() => setPick(r)}>{r}</button>)}
+        </div>
+        <div className="row" style={{ justifyContent: "flex-end" }}>
+          <button className="btn" onClick={onCancel}>Cancel</button>
+          <button className="btn" onClick={() => onPick("")}>Skip</button>
+          <button className="btn primary" disabled={!pick} onClick={() => onPick(pick)}>Move to Lost</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -623,6 +687,7 @@ function LeadCard({ l, eng, onOpen, draggable }) {
         {l.monetary_value > 0 && <Chip>{eur(l.monetary_value)}</Chip>}
         {l.recordings > 0 && <Chip>Fathom ×{l.recordings}</Chip>}
         {l.builders > 0 && <Chip kind="brand">Builder sent</Chip>}
+        {l.lost_reason && <Chip kind="danger">{l.lost_reason}</Chip>}
         {eng && <Chip kind={eng.stage === "declined" ? "danger" : "accent"}>{stageLabel(eng.stage)}</Chip>}
       </div>
     </div>
@@ -758,6 +823,13 @@ function LeadDrawer({ lead, engagement, onClose, reload }) {
         <dt>Company</dt><dd>{lead.company || "—"}</dd>
         <dt>Email</dt><dd>{lead.email || "—"}</dd>
         <dt>Phone</dt><dd>{lead.phone || "—"}</dd>
+        {lead.lost_at && <><dt>Why lost</dt><dd>
+          <select value={lead.lost_reason ?? ""} disabled={busy}
+            onChange={(ev) => run(() => rpc("set_lost_reason", { p_opportunity_id: lead.ghl_id, p_reason: ev.target.value }).then(reload), "Reason saved")}>
+            <option value="">Not set</option>
+            {[...LOST_REASONS, "Disqualified"].map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </dd></>}
         <dt>Country</dt><dd>{lead.country || "—"}</dd>
         <dt>Source</dt><dd>{lead.source || "—"}</dd>
         <dt>Owner</dt><dd>{lead.assigned_to || "—"}</dd>
@@ -2023,9 +2095,213 @@ function FilesStep({ e, invoices, shared, feed, docs, project, overview, reload,
   );
 }
 
+// ===================== pages/Reports.jsx =====================
+const isoDay = (d) => d.toISOString().slice(0, 10);
+const addDays = (d, n) => { const x = new Date(d); x.setUTCDate(x.getUTCDate() + n); return x; };
+/** Period pill → { since, until } as YYYY-MM-DD (until inclusive), plus a label. */
+function periodRange(p) {
+  const today = new Date();
+  if (p === "7") return { since: isoDay(addDays(today, -6)), until: isoDay(today), label: "Last 7 days" };
+  if (p === "30") return { since: isoDay(addDays(today, -29)), until: isoDay(today), label: "Last 30 days" };
+  if (p === "month") {
+    const first = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
+    const last = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
+    return { since: isoDay(first), until: isoDay(last), label: first.toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" }) };
+  }
+  return { since: "1900-01-01", until: isoDay(today), label: "All time" };
+}
+const usd = (n) => money(n, "USD");
+const pct = (n) => (n == null ? "–" : `${Math.round(n)}%`);
+const per = (amount, count, ccy = "EUR") => (count > 0 ? money(amount / count, ccy) : "–");
+const whyLost = (j) => Object.entries(j ?? {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(" · ");
+
+/** Loads everything the Reports screen and the Dashboard show, for one period. */
+function useReportData(period, level = "campaign") {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const range = periodRange(period);
+  const load = useCallback(async () => {
+    setErr("");
+    try {
+      const allTime = range.since === "1900-01-01";
+      const [headline, funnel, ads, ghl] = await Promise.all([
+        rpc("report_headline", { p_since: range.since, p_until: range.until }),
+        rpc("report_funnel", { p_since: range.since, p_until: `${range.until}T23:59:59Z` }),
+        rpc("report_ads", { p_since: range.since, p_until: range.until, p_level: level }),
+        callFn("meta-ads", allTime ? { action: "ghl_funnel" } : { action: "ghl_funnel", since: range.since, until: range.until }).catch(() => null),
+      ]);
+      setData({ headline, funnel, ads, ghl: ghl?.rows ?? [] });
+    } catch (e) { setErr(e.message); }
+  }, [range.since, range.until, level]);
+
+  // pull fresh Meta numbers at most every 6 hours, then reload
+  const refresh = useCallback(async (days = 35) => {
+    setSyncing(true);
+    try { await callFn("meta-ads", { action: "refresh", days }); await load(); }
+    catch (e) { setErr(`Meta refresh failed: ${e.message}`); }
+    finally { setSyncing(false); }
+  }, [load]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    supabase.from("meta_insights_daily").select("synced_at").order("synced_at", { ascending: false }).limit(1).maybeSingle()
+      .then(({ data: row }) => {
+        const stale = !row || Date.now() - new Date(row.synced_at).getTime() > 6 * 36e5;
+        if (stale) refresh();
+      });
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  return { data, err, syncing, refresh, range, reload: load };
+}
+
+function PeriodPills({ period, setPeriod }) {
+  const opts = [["all", "All time"], ["7", "Last 7 days"], ["30", "Last 30 days"], ["month", "Last month"]];
+  return <div className="pills">{opts.map(([k, l]) => <button key={k} className={period === k ? "on" : ""} onClick={() => setPeriod(k)}>{l}</button>)}</div>;
+}
+
+function Headline({ h, range }) {
+  if (!h) return null;
+  const ret = h.spend_eur > 0 && h.fees_eur > 0 ? `${(h.fees_eur / h.spend_eur).toFixed(1)}x return on spend` : "return on spend shows once a fee is signed";
+  return (
+    <div className="stats">
+      <div className="stat"><div className="lbl">Ad spend <span className="src meta">Meta</span></div><div className="val">{usd(h.spend_usd)}</div><div className="sub">{eur(h.spend_eur)} at ECB rates · {range.label}</div></div>
+      <div className="stat"><div className="lbl">Leads <span className="src meta">Meta</span></div><div className="val">{h.leads}</div><div className="sub">{per(h.spend_usd, h.leads, "USD")} per lead</div></div>
+      <div className="stat"><div className="lbl">Calls booked <span className="src ghl">GHL</span></div><div className="val">{h.calls_booked}</div><div className="sub">{per(h.spend_eur, h.calls_booked)} per booked call</div></div>
+      <div className="stat"><div className="lbl">Engagements signed <span className="src sol">Solonos</span></div><div className="val">{h.engagements}</div><div className="sub">{per(h.spend_eur, h.engagements)} per engagement</div></div>
+      <div className="stat hero"><div className="lbl">Fees signed</div><div className="val">{eur(h.fees_eur)}</div><div className="sub">{ret}</div></div>
+    </div>
+  );
+}
+
+function Reports() {
+  const [period, setPeriod] = useState("30");
+  const [level, setLevel] = useState("campaign");
+  const { data, err, syncing, refresh, range } = useReportData(period, level);
+  const h = data?.headline;
+  const ghlRows = data?.ghl ?? [];
+  const funnel = data?.funnel ?? [];
+  const ads = data?.ads ?? [];
+  const firstReached = funnel[0]?.reached ?? 0;
+  const lastGhl = ghlRows[ghlRows.length - 1]?.reached;
+  const tot = ads.reduce((a, r) => ({ spend_usd: a.spend_usd + Number(r.spend_usd), spend_eur: a.spend_eur + Number(r.spend_eur), impressions: a.impressions + Number(r.impressions), clicks: a.clicks + Number(r.clicks), leads: a.leads + Number(r.leads), calls_booked: a.calls_booked + Number(r.calls_booked), engagements: a.engagements + Number(r.engagements), fees_eur: a.fees_eur + Number(r.fees_eur) }), { spend_usd: 0, spend_eur: 0, impressions: 0, clicks: 0, leads: 0, calls_booked: 0, engagements: 0, fees_eur: 0 });
+  const retOf = (r) => (Number(r.spend_eur) > 0 && Number(r.fees_eur) > 0 ? `${(Number(r.fees_eur) / Number(r.spend_eur)).toFixed(1)}x` : "–");
+
+  return (
+    <>
+      <div className="pagehead">
+        <div><h1>Reports</h1><p>Spend, funnel and revenue on one period. {syncing ? "Updating from Meta…" : ""}</p></div>
+        <div className="row">
+          <PeriodPills period={period} setPeriod={setPeriod} />
+          <button className="btn" onClick={() => refresh()} disabled={syncing}>{syncing ? "Refreshing…" : "Refresh Meta"}</button>
+        </div>
+      </div>
+      {err && <div className="note" style={{ color: "var(--danger)", marginBottom: 14 }}>{err}</div>}
+      <Headline h={h} range={range} />
+
+      <Card title={<>Funnel <span className="src ghl">GHL stages</span></>} right={<span className="muted small">Reached = was in this stage or a later one during the period</span>} style={{ marginBottom: 18 }}>
+        <table className="table">
+          <thead><tr><th>Stage</th><th className="num">Reached</th><th className="num">Conversion</th><th className="num">Lost here</th><th className="num">Avg days in stage</th><th>Why lost</th></tr></thead>
+          <tbody>
+            {ghlRows.map((r, i) => (
+              <tr key={r.stage_id}>
+                <td>{r.stage_name} <span className="muted small">(GHL only, before the board)</span></td>
+                <td className="num">{r.reached}</td>
+                <td className="num">{i === 0 ? "–" : pct(ghlRows[i - 1].reached > 0 ? 100 * r.reached / ghlRows[i - 1].reached : null)}</td>
+                <td className="num">{r.lost_here ?? "–"}</td>
+                <td className="num ghost">not tracked</td>
+                <td className="ghost">{i === 0 ? "GHL keeps no reason" : ""}</td>
+              </tr>
+            ))}
+            {funnel.map((r, i) => (
+              <tr key={r.stage_id} style={i === funnel.length - 1 ? { fontWeight: 600 } : undefined}>
+                <td>{r.stage_name}</td>
+                <td className="num">{r.reached}</td>
+                <td className="num">{i === 0 ? pct(lastGhl > 0 ? 100 * r.reached / lastGhl : null) : pct(r.conversion)}</td>
+                <td className="num">{r.lost_here}</td>
+                <td className="num">{r.avg_days ?? "–"}</td>
+                <td>{whyLost(r.why_lost) || ""}</td>
+              </tr>
+            ))}
+            {funnel.length === 0 && ghlRows.length === 0 && <tr><td colSpan="6" className="muted">No leads in this period.</td></tr>}
+          </tbody>
+        </table>
+        {funnel.length > 0 && ghlRows.length > 0 && ghlRows[0].reached > 0 && (
+          <p className="muted small" style={{ margin: "10px 0 0" }}>
+            {funnel[funnel.length - 1].stage_name}: {funnel[funnel.length - 1].reached} of {ghlRows[0].reached} leads ({pct(100 * funnel[funnel.length - 1].reached / ghlRows[0].reached)}).
+            Stage history is recorded from 17 Sep 2026; "Avg days" and "Why lost" fill in as leads move from then on.
+          </p>
+        )}
+      </Card>
+
+      <Card title={<>Ads <span className="src meta">Meta</span> <span className="muted small" style={{ fontWeight: 400 }}>spend and leads</span> <span className="src ghl">GHL</span> <span className="muted small" style={{ fontWeight: 400 }}>calls</span> <span className="src sol">Solonos</span> <span className="muted small" style={{ fontWeight: 400 }}>engagements and fees</span></>}
+        right={<div className="pills">{[["campaign", "Campaign"], ["adset", "Ad set"], ["ad", "Ad"]].map(([k, l]) => <button key={k} className={level === k ? "on" : ""} onClick={() => setLevel(k)}>{l}</button>)}</div>}>
+        <div style={{ overflowX: "auto" }}>
+          <table className="table">
+            <thead><tr><th>{level === "campaign" ? "Campaign" : level === "adset" ? "Ad set" : "Ad"}</th><th>Status</th><th className="num">Spend</th><th className="num">In EUR</th><th className="num">Impressions</th><th className="num">Clicks</th><th className="num">Leads</th><th className="num">Cost / lead</th><th className="num">Calls booked</th><th className="num">Engagements</th><th className="num">Fees signed</th><th className="num">Return</th></tr></thead>
+            <tbody>
+              {ads.map((r) => (
+                <tr key={r.meta_id}>
+                  <td>{r.name}{level !== "campaign" && <div className="muted small">{r.campaign_name}</div>}</td>
+                  <td>{r.status && <Chip kind={r.status === "ACTIVE" ? "ok" : ""}>{r.status === "ACTIVE" ? "Active" : r.status === "PAUSED" ? "Paused" : r.status.toLowerCase()}</Chip>}</td>
+                  <td className="num">{usd(r.spend_usd)}</td><td className="num">{eur(r.spend_eur)}</td>
+                  <td className="num">{Number(r.impressions).toLocaleString("en-GB")}</td><td className="num">{Number(r.clicks).toLocaleString("en-GB")}</td>
+                  <td className="num">{r.leads}</td><td className="num">{per(r.spend_usd, r.leads, "USD")}</td>
+                  <td className="num">{r.calls_booked}</td><td className="num">{r.engagements}</td><td className="num">{eur(r.fees_eur)}</td><td className="num">{retOf(r)}</td>
+                </tr>
+              ))}
+              {ads.length > 0 && (
+                <tr className="total">
+                  <td>All</td><td></td><td className="num">{usd(tot.spend_usd)}</td><td className="num">{eur(tot.spend_eur)}</td>
+                  <td className="num">{tot.impressions.toLocaleString("en-GB")}</td><td className="num">{tot.clicks.toLocaleString("en-GB")}</td>
+                  <td className="num">{tot.leads}</td><td className="num">{per(tot.spend_usd, tot.leads, "USD")}</td>
+                  <td className="num">{tot.calls_booked}</td><td className="num">{tot.engagements}</td><td className="num">{eur(tot.fees_eur)}</td><td className="num">{retOf(tot)}</td>
+                </tr>
+              )}
+              {ads.length === 0 && <tr><td colSpan="12" className="muted">{data ? "No spend in this period." : "Loading…"}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <p className="muted small" style={{ margin: "10px 0 0" }}>Rows without spend in the period are hidden. Calls, engagements and fees are matched through the ad attribution GHL stores on each contact. Meta's lead count and GHL's will differ; that gap is normal.</p>
+      </Card>
+    </>
+  );
+}
+
+// ===================== pages/Dashboard.jsx =====================
+function Dashboard() {
+  const [period, setPeriod] = useState("30");
+  const { data, err, syncing, range } = useReportData(period);
+  const funnel = data?.funnel ?? [];
+  const ghl = data?.ghl ?? [];
+  const chain = [...ghl.map((r) => [r.stage_name, r.reached]), ...funnel.map((r) => [r.stage_name, r.reached])];
+  return (
+    <>
+      <div className="pagehead">
+        <div><h1>Dashboard</h1><p>{range.label}. {syncing ? "Updating from Meta…" : ""}</p></div>
+        <PeriodPills period={period} setPeriod={setPeriod} />
+      </div>
+      {err && <div className="note" style={{ color: "var(--danger)", marginBottom: 14 }}>{err}</div>}
+      <Headline h={data?.headline} range={range} />
+      <Card title="Funnel" right={<NavLink to="/app/reports" className="btn">Open reports</NavLink>}>
+        {chain.length === 0 ? <span className="muted">No leads in this period.</span> : (
+          <div className="row wrap" style={{ gap: 6 }}>
+            {chain.map(([name, n], i) => (
+              <Fragment key={name}>
+                {i > 0 && <span className="muted">→</span>}
+                <span className="chip" style={{ fontSize: 12, padding: "4px 10px" }}><strong>{n}</strong> {name}</span>
+              </Fragment>
+            ))}
+          </div>
+        )}
+      </Card>
+    </>
+  );
+}
+
 // ===================== App.jsx =====================
 const NAV = [
-  ["Dashboard", "/app/dashboard", 5],
+  ["Dashboard", "/app/dashboard"],
   ["Leads", "/app/leads"],
   ["Engagements", "/app/engagements"],
   ["Valuation Builder", "/app/valuation-builder"],
@@ -2034,7 +2310,7 @@ const NAV = [
   ["Documents", "/app/documents", 5],
   ["Time", "/app/time", 4],
   ["Invoices", "/app/invoices", 3],
-  ["Reports", "/app/reports", 5],
+  ["Reports", "/app/reports"],
 ];
 
 function SetPassword() {
@@ -2064,6 +2340,7 @@ function Shell({ session, staff, signOut }) {
     <div className="shell">
       <nav className="sidebar">
         <div className="wordmark">Solonos</div>
+        <Bell />
         <a href="/app/engagements" title="Open an engagement and click 'Preview client's page'">Client portal <span className="soon">via engagement</span></a>
         {NAV.map(([label, to, slice]) => (
           <NavLink key={to} to={to} className={({ isActive }) => (isActive ? "active" : "")}>
@@ -2080,6 +2357,8 @@ function Shell({ session, staff, signOut }) {
       </nav>
       <main className="main">
         <Routes>
+          <Route path="/app/dashboard" element={<Dashboard />} />
+          <Route path="/app/reports" element={<Reports />} />
           <Route path="/app/leads" element={<Leads />} />
           <Route path="/app/engagements" element={<Engagements />} />
           <Route path="/app/engagements/:id" element={<EngagementDetail />} />
@@ -2088,6 +2367,45 @@ function Shell({ session, staff, signOut }) {
           <Route path="*" element={<Navigate to="/app/leads" replace />} />
         </Routes>
       </main>
+    </div>
+  );
+}
+
+/** Bell: client actions across all engagements, unread since the last time you opened it. */
+function Bell() {
+  const [items, setItems] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [seen, setSeen] = useState(() => localStorage.getItem("solonos.bellSeen") ?? "1970-01-01");
+  const nav = useNavigate();
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("activity_log").select("id, engagement_id, actor, action, detail, created_at")
+      .or("action.like.client.%,action.eq.agreement.signed,action.eq.deposit.claimed,action.eq.invoice.claimed")
+      .order("created_at", { ascending: false }).limit(25);
+    const rows = (data ?? []).filter((r) => String(r.actor).includes("@") && !/consortiaadvisory\.com$/i.test(r.actor));
+    const ids = [...new Set(rows.map((r) => r.engagement_id))];
+    const { data: engs } = ids.length ? await supabase.from("engagements").select("id, client_name, company_name").in("id", ids) : { data: [] };
+    const byId = Object.fromEntries((engs ?? []).map((e) => [e.id, e]));
+    setItems(rows.map((r) => ({ ...r, eng: byId[r.engagement_id] })));
+  }, []);
+  useEffect(() => { load(); const t = setInterval(load, 60 * 1000); return () => clearInterval(t); }, [load]);
+  const unread = items.filter((r) => r.created_at > seen).length;
+  const openIt = () => { setOpen(!open); if (!open) { const now = new Date().toISOString(); localStorage.setItem("solonos.bellSeen", now); setSeen(now); } };
+  return (
+    <div style={{ position: "relative", padding: "0 10px 8px" }}>
+      <button onClick={openIt} style={{ background: unread ? "var(--on)" : "rgba(255,255,255,.12)", color: unread ? "var(--brand)" : "var(--on)", border: 0, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600, width: "100%" }}>
+        🔔 {unread ? `${unread} new` : "Notifications"}
+      </button>
+      {open && (
+        <div style={{ position: "absolute", left: 10, top: 36, width: 340, background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "0 10px 30px rgba(0,0,0,.25)", zIndex: 40, maxHeight: 420, overflowY: "auto" }}>
+          {items.length === 0 && <div className="muted small" style={{ padding: 12 }}>No client activity yet.</div>}
+          {items.map((r) => (
+            <div key={r.id} onClick={() => { setOpen(false); nav(`/app/engagements/${r.engagement_id}`); }} style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-sub)", cursor: "pointer", fontSize: 12 }}>
+              <div>{describe(r, r.eng?.client_name ?? r.actor)}</div>
+              <div className="muted">{r.eng?.company_name || ""} · {ago(r.created_at)}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
