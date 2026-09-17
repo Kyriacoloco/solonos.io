@@ -157,9 +157,12 @@ if (session) {
     status("Saving PDF…"); btn.disabled = true;
     try {
       const blob = await capturePages();
-      const name = "Valuation Builder - " + new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+      const companyInput = document.querySelector('input[placeholder="e.g. ThermoClean Ltd"]');
+      const company = (companyInput && companyInput.value.trim()) || "Valuation";
+      const name = company + " - Market Example Range";
       const folder = eng ? eng : ("leads/" + lead);
-      const path = folder + "/" + Date.now() + "-Valuation-Builder.pdf";
+      const slug = company.replace(/[^A-Za-z0-9.-]+/g, "-").replace(/^-+|-+$/g, "") || "Valuation";
+      const path = folder + "/" + Date.now() + "-" + slug + "-Market-Example-Range.pdf";
       const { error } = await supabase.storage.from("deliverables").upload(path, blob, { contentType: "application/pdf" });
       if (error) throw new Error(error.message);
       const row = { kind: "valuation_builder", name, storage_path: "deliverables/" + path, uploaded_by: "staff", visibility: eng ? "client" : "internal" };

@@ -174,7 +174,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "2.2";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "2.3";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -631,6 +631,51 @@ function NotesLog({ opportunityId, engagementId, title = "My notes" }) {
 }
 
 /** Valuation Builder PDFs attached to a lead; they follow the lead into its engagement. */
+/** The email that carries the Market Example Range after Call 1. Edit the wording here. */
+function builderEmail({ first, company, personal }) {
+  const p = (t) => `<p style="margin:0 0 14px">${t}</p>`;
+  return `<div style="font-family:Inter,Arial,sans-serif;max-width:560px;padding:28px 24px;color:#2A1E20;font-size:15px;line-height:1.55">
+<div style="font:600 20px Georgia,serif;color:#800020;margin-bottom:18px">Consortia Advisory</div>
+${p(`Hi ${first},`)}
+${p(`Thank you for the call today. Attached is the Market Example Range for <strong>${company}</strong>, built from the figures you gave me on the call.`)}
+${personal ? p(personal.replace(/\n/g, "<br>")) : ""}
+${p(`Please read it as a market sample, not a valuation: it shows what buyers in your sector are paying today and where ${company} would sit on standard assumptions. The three issues on the last page are the ones a buyer will find in the first week of diligence, and each one is fixable.`)}
+${p(`The full valuation report replaces the standard assumptions with your actual numbers, documents every input to IVS standard and is signed by an independent valuer, so it holds up in front of a buyer, a bank or a tax authority. If you would like to go ahead, reply to this email and I will send the engagement letter and the next steps the same day.`)}
+${p(`Happy to answer any question on the numbers in the meantime.`)}
+<p style="margin:22px 0 0">Kind regards,<br><strong>Kyriacos</strong><br><span style="color:#6B5457">UK-Qualified Chartered Accountant (ICAEW)<br>Consortia Advisory</span></p>
+</div>`;
+}
+
+function SendBuilderDialog({ doc, lead, onSend, onCancel }) {
+  const [personal, setPersonal] = useState("");
+  const company = doc.name.replace(/ - Market Example Range$/, "");
+  useEffect(() => {
+    const k = (e) => e.key === "Escape" && onCancel();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onCancel]);
+  return (
+    <div className="modal-bg" onClick={onCancel}>
+      <div className="modal" style={{ width: "min(560px, 92vw)" }} role="dialog" aria-label="Send to client" onClick={(e) => e.stopPropagation()}>
+        <h2>Send to {lead.first_name || lead.name.split("|")[0].trim()}</h2>
+        <dl className="kv" style={{ margin: "12px 0" }}>
+          <dt>To</dt><dd>{lead.email}</dd>
+          <dt>Subject</dt><dd>{company}: your Market Example Range</dd>
+          <dt>Attached</dt><dd>{doc.name}.pdf</dd>
+          <dt>Then</dt><dd>Lead moves to Full Offer Made</dd>
+        </dl>
+        <Field label="Add a personal line (optional, goes after the first paragraph)">
+          <textarea rows="3" value={personal} onChange={(e) => setPersonal(e.target.value)} placeholder="e.g. As discussed, the owner-dependence point is the one I would fix first." />
+        </Field>
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+          <button className="btn" onClick={onCancel}>Cancel</button>
+          <button className="btn primary" onClick={() => onSend(personal.trim())}>Send email</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LeadBuilders({ lead, reload }) {
   const [run, busy] = useAction();
   const [docs, setDocs] = useState([]);
@@ -650,10 +695,37 @@ function LeadBuilders({ lead, reload }) {
       const path = `leads/${lead.ghl_id}/${Date.now()}-${file.name}`;
       const { error } = await supabase.storage.from("deliverables").upload(path, file);
       if (error) throw new Error(error.message);
-      const { error: e2 } = await supabase.from("documents").insert({ opportunity_id: lead.ghl_id, kind: "valuation_builder", name: `Valuation Builder - ${day(new Date())}`, storage_path: `deliverables/${path}`, visibility: "internal", uploaded_by: "staff" });
+      const { error: e2 } = await supabase.from("documents").insert({ opportunity_id: lead.ghl_id, kind: "valuation_builder", name: `${lead.company || lead.name.split("|")[0].trim()} - Market Example Range`, storage_path: `deliverables/${path}`, visibility: "internal", uploaded_by: "staff" });
       if (e2) throw new Error(e2.message);
       await load(); await reload?.();
     }, "Valuation Builder saved on this lead");
+  }
+  const [sending, setSending] = useState(null);   // the document about to be emailed
+  async function sendToClient(d, personal) {
+    setSending(null);
+    await run(async () => {
+      if (!lead.email) throw new Error("This lead has no email address in GHL");
+      const blob = await (await fetch(await signedUrl(d.storage_path))).blob();
+      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = () => rej(new Error("Could not read the PDF")); r.readAsDataURL(blob); });
+      const company = d.name.replace(/ - Market Example Range$/, "");
+      const first = lead.first_name || lead.name.split("|")[0].trim().split(" ")[0];
+      await callFn("send-email", {
+        to: lead.email, subject: `${company}: your Market Example Range`,
+        html: builderEmail({ first, company, personal }),
+        attachment: { filename: `${company} - Market Example Range.pdf`, contentBase64: b64, contentType: "application/pdf" },
+      });
+      await supabase.from("documents").update({ sent_at: new Date().toISOString() }).eq("id", d.id);
+      const { data: me } = await supabase.auth.getUser();
+      await supabase.from("lead_notes").insert({ opportunity_id: lead.ghl_id, body: `Market Example Range emailed to ${lead.email}`, author: me?.user?.email ?? "staff" });
+      // the offer is out: the lead moves to Full Offer Made in GHL
+      const { data: st } = await supabase.from("pipeline_stages").select("ghl_id").ilike("name", "full offer%").maybeSingle();
+      if (st && lead.stage_id !== st.ghl_id) {
+        const { data, error } = await supabase.functions.invoke("ghl-sync", { body: { action: "move", opportunity_id: lead.ghl_id, stage_id: st.ghl_id } });
+        if (error) throw new Error("Email sent, but the move to Full Offer Made failed: " + ((await error.context?.json?.().catch(() => null))?.error ?? error.message));
+        if (data?.ok === false) throw new Error("Email sent, but the move to Full Offer Made failed: " + data.error);
+      }
+      await load(); await reload?.();
+    }, "Sent to the client and moved to Full Offer Made");
   }
   const remove = (d) => run(async () => {
     await supabase.storage.from("deliverables").remove([d.storage_path.replace(/^deliverables\//, "")]);
@@ -666,7 +738,17 @@ function LeadBuilders({ lead, reload }) {
       <h3>Valuation Builder</h3>
       <div className="stack" style={{ margin: "8px 0 18px", gap: 6 }}>
         {docs.length === 0 && <span className="muted small">None yet. Open the builder for this lead, press Print when done: the PDF is saved here automatically. It moves with the lead into the engagement and the client sees it on their page.</span>}
-        {docs.map((d) => <div key={d.id} className="row between small"><span>{d.name}<div className="muted">{ago(d.created_at)}</div></span><span className="row"><button className="btn" onClick={() => open(d.storage_path)}>Open</button><button className="btn" disabled={busy} onClick={() => remove(d)}>Remove</button></span></div>)}
+        {docs.map((d) => (
+          <div key={d.id} className="row between small">
+            <span>{d.name}<div className="muted">{ago(d.created_at)}{d.sent_at && <> · <span style={{ color: "var(--ok)" }}>sent {day(d.sent_at)}</span></>}</div></span>
+            <span className="row">
+              <button className="btn primary" disabled={busy || !lead.email} title={lead.email ? `Email to ${lead.email}` : "No email on this lead"} onClick={() => setSending(d)}>{d.sent_at ? "Send again" : "Send to client"}</button>
+              <button className="btn" onClick={() => open(d.storage_path)}>Open</button>
+              <button className="btn" disabled={busy} onClick={() => remove(d)}>Remove</button>
+            </span>
+          </div>
+        ))}
+        {sending && <SendBuilderDialog doc={sending} lead={lead} onSend={(personal) => sendToClient(sending, personal)} onCancel={() => setSending(null)} />}
         <div className="row">
           <a className="btn primary" href={`/ConsortiaValuationBuilder.html?lead=${encodeURIComponent(lead.ghl_id)}&v=${Date.now()}`} target="_blank" rel="noreferrer">Open Valuation Builder for this lead</a>
           <label className="btn" style={{ cursor: "pointer" }}>{busy ? "Uploading…" : "Attach a PDF"}<input type="file" accept=".pdf" style={{ display: "none" }} disabled={busy} onChange={(x) => x.target.files[0] && upload(x.target.files[0])} /></label>
@@ -1422,7 +1504,7 @@ function NotesCard({ e, contact, reload }) {
       const path = `${e.id}/${Date.now()}-${file.name}`;
       const { error } = await supabase.storage.from("deliverables").upload(path, file);
       if (error) throw new Error(error.message);
-      const { error: e2 } = await supabase.from("documents").insert({ engagement_id: e.id, opportunity_id: e.opportunity_id ?? null, kind: "valuation_builder", name: `Valuation Builder - ${day(new Date())}`, storage_path: `deliverables/${path}`, visibility: "client", uploaded_by: "staff" });
+      const { error: e2 } = await supabase.from("documents").insert({ engagement_id: e.id, opportunity_id: e.opportunity_id ?? null, kind: "valuation_builder", name: `${e.company_name || e.client_name} - Market Example Range`, storage_path: `deliverables/${path}`, visibility: "client", uploaded_by: "staff" });
       if (e2) throw new Error(e2.message);
       await load();
     }, "Valuation Builder PDF attached and visible to the client");
