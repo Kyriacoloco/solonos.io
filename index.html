@@ -109,6 +109,8 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 .table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .table tr.total td { font-weight: 700; background: var(--sunken); border-top: 2px solid var(--border); }
 .table td.ghost { color: var(--warn); font-style: italic; }
+.fbar { height: 14px; background: var(--accent); border-radius: 3px; min-width: 3px; transition: width .3s; }
+.table td.bar { width: 34%; padding-right: 24px; }
 .src { font-size: 10px; padding: 1px 7px; border-radius: 9px; color: var(--on); background: var(--text-3); vertical-align: middle; margin-left: 6px; }
 .src.meta { background: var(--accent); } .src.ghl { background: var(--warn); } .src.sol { background: var(--brand); }
 .modal-bg { position: fixed; inset: 0; background: rgba(42,30,32,.35); z-index: 30; display: grid; place-items: center; }
@@ -172,7 +174,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "2.0";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "2.2";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -2096,6 +2098,7 @@ function FilesStep({ e, invoices, shared, feed, docs, project, overview, reload,
 }
 
 // ===================== pages/Reports.jsx =====================
+const FUNNEL_START = "2026-08-15";   // the day this funnel went live; "All time" starts here and older Meta spend is ignored
 const isoDay = (d) => d.toISOString().slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d); x.setUTCDate(x.getUTCDate() + n); return x; };
 /** Period pill → { since, until } as YYYY-MM-DD (until inclusive), plus a label. */
@@ -2108,7 +2111,7 @@ function periodRange(p) {
     const last = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
     return { since: isoDay(first), until: isoDay(last), label: first.toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" }) };
   }
-  return { since: "1900-01-01", until: isoDay(today), label: "All time" };
+  return { since: FUNNEL_START, until: isoDay(today), label: "Since 15 Aug 2026" };
 }
 const usd = (n) => money(n, "USD");
 const pct = (n) => (n == null ? "–" : `${Math.round(n)}%`);
@@ -2124,12 +2127,11 @@ function useReportData(period, level = "campaign") {
   const load = useCallback(async () => {
     setErr("");
     try {
-      const allTime = range.since === "1900-01-01";
       const [headline, funnel, ads, ghl] = await Promise.all([
         rpc("report_headline", { p_since: range.since, p_until: range.until }),
         rpc("report_funnel", { p_since: range.since, p_until: `${range.until}T23:59:59Z` }),
         rpc("report_ads", { p_since: range.since, p_until: range.until, p_level: level }),
-        callFn("meta-ads", allTime ? { action: "ghl_funnel" } : { action: "ghl_funnel", since: range.since, until: range.until }).catch(() => null),
+        callFn("meta-ads", { action: "ghl_funnel", since: range.since, until: range.until }).catch(() => null),
       ]);
       setData({ headline, funnel, ads, ghl: ghl?.rows ?? [] });
     } catch (e) { setErr(e.message); }
@@ -2184,6 +2186,8 @@ function Reports() {
   const ads = data?.ads ?? [];
   const firstReached = funnel[0]?.reached ?? 0;
   const lastGhl = ghlRows[ghlRows.length - 1]?.reached;
+  const maxReached = Math.max(1, ...ghlRows.map((r) => r.reached), ...funnel.map((r) => r.reached));
+  const bar = (n) => <td className="bar"><div className="fbar" style={{ width: `${100 * n / maxReached}%` }} /></td>;
   const tot = ads.reduce((a, r) => ({ spend_usd: a.spend_usd + Number(r.spend_usd), spend_eur: a.spend_eur + Number(r.spend_eur), impressions: a.impressions + Number(r.impressions), clicks: a.clicks + Number(r.clicks), leads: a.leads + Number(r.leads), calls_booked: a.calls_booked + Number(r.calls_booked), engagements: a.engagements + Number(r.engagements), fees_eur: a.fees_eur + Number(r.fees_eur) }), { spend_usd: 0, spend_eur: 0, impressions: 0, clicks: 0, leads: 0, calls_booked: 0, engagements: 0, fees_eur: 0 });
   const retOf = (r) => (Number(r.spend_eur) > 0 && Number(r.fees_eur) > 0 ? `${(Number(r.fees_eur) / Number(r.spend_eur)).toFixed(1)}x` : "–");
 
@@ -2201,11 +2205,12 @@ function Reports() {
 
       <Card title={<>Funnel <span className="src ghl">GHL stages</span></>} right={<span className="muted small">Reached = was in this stage or a later one during the period</span>} style={{ marginBottom: 18 }}>
         <table className="table">
-          <thead><tr><th>Stage</th><th className="num">Reached</th><th className="num">Conversion</th><th className="num">Lost here</th><th className="num">Avg days in stage</th><th>Why lost</th></tr></thead>
+          <thead><tr><th>Stage</th><th></th><th className="num">Reached</th><th className="num">Conversion</th><th className="num">Lost here</th><th className="num">Avg days in stage</th><th>Why lost</th></tr></thead>
           <tbody>
             {ghlRows.map((r, i) => (
               <tr key={r.stage_id}>
                 <td>{r.stage_name} <span className="muted small">(GHL only, before the board)</span></td>
+                {bar(r.reached)}
                 <td className="num">{r.reached}</td>
                 <td className="num">{i === 0 ? "–" : pct(ghlRows[i - 1].reached > 0 ? 100 * r.reached / ghlRows[i - 1].reached : null)}</td>
                 <td className="num">{r.lost_here ?? "–"}</td>
@@ -2216,6 +2221,7 @@ function Reports() {
             {funnel.map((r, i) => (
               <tr key={r.stage_id} style={i === funnel.length - 1 ? { fontWeight: 600 } : undefined}>
                 <td>{r.stage_name}</td>
+                {bar(r.reached)}
                 <td className="num">{r.reached}</td>
                 <td className="num">{i === 0 ? pct(lastGhl > 0 ? 100 * r.reached / lastGhl : null) : pct(r.conversion)}</td>
                 <td className="num">{r.lost_here}</td>
@@ -2223,7 +2229,7 @@ function Reports() {
                 <td>{whyLost(r.why_lost) || ""}</td>
               </tr>
             ))}
-            {funnel.length === 0 && ghlRows.length === 0 && <tr><td colSpan="6" className="muted">No leads in this period.</td></tr>}
+            {funnel.length === 0 && ghlRows.length === 0 && <tr><td colSpan="7" className="muted">No leads in this period.</td></tr>}
           </tbody>
         </table>
         {funnel.length > 0 && ghlRows.length > 0 && ghlRows[0].reached > 0 && (
