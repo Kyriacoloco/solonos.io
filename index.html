@@ -174,7 +174,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "2.3";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "2.4";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -212,6 +212,13 @@ const PORTAL_URL = window.location.origin + "/portal";
 const eur = (n) => new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(Number(n || 0));
 const money = (n, ccy = "EUR") => new Intl.NumberFormat("en-IE", { style: "currency", currency: ccy, maximumFractionDigits: 2 }).format(Number(n || 0));
 const day = (d) => (d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "");
+/** "Mon 21 Sept, 14:00" in the viewer's own time zone; with full=true also the year. */
+const callWhen = (iso, full = false) => {
+  const d = new Date(iso);
+  const date = d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", ...(full ? { year: "numeric" } : {}) });
+  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  return `${date}, ${time}`;
+};
 const ago = (d) => {
   if (!d) return "";
   const h = (Date.now() - new Date(d).getTime()) / 36e5;
@@ -299,8 +306,8 @@ function Field({ label, children }) {
   return <div className="field"><label>{label}</label>{children}</div>;
 }
 
-function Chip({ kind, children }) {
-  return <span className={`chip ${kind ?? ""}`}>{children}</span>;
+function Chip({ kind, children, title }) {
+  return <span className={`chip ${kind ?? ""}`} title={title}>{children}</span>;
 }
 
 function Empty({ title, children }) {
@@ -772,6 +779,7 @@ function LeadCard({ l, eng, onOpen, draggable }) {
         {l.recordings > 0 && <Chip>Fathom ×{l.recordings}</Chip>}
         {l.builders > 0 && <Chip kind="brand">Builder sent</Chip>}
         {l.lost_reason && <Chip kind="danger">{l.lost_reason}</Chip>}
+        {l.call_at && <Chip kind={new Date(l.call_at) >= new Date() ? "ok" : ""} title={l.call_title || "Call"}>{callWhen(l.call_at)}</Chip>}
         {eng && <Chip kind={eng.stage === "declined" ? "danger" : "accent"}>{stageLabel(eng.stage)}</Chip>}
       </div>
     </div>
@@ -907,6 +915,7 @@ function LeadDrawer({ lead, engagement, onClose, reload }) {
         <dt>Company</dt><dd>{lead.company || "—"}</dd>
         <dt>Email</dt><dd>{lead.email || "—"}</dd>
         <dt>Phone</dt><dd>{lead.phone || "—"}</dd>
+        {lead.call_at && <><dt>Call</dt><dd>{callWhen(lead.call_at, true)}{lead.call_status && <span className="muted"> · {lead.call_status.replace(/_/g, " ")}</span>}</dd></>}
         {lead.lost_at && <><dt>Why lost</dt><dd>
           <select value={lead.lost_reason ?? ""} disabled={busy}
             onChange={(ev) => run(() => rpc("set_lost_reason", { p_opportunity_id: lead.ghl_id, p_reason: ev.target.value }).then(reload), "Reason saved")}>
