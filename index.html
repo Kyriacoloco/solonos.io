@@ -174,7 +174,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "2.7";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "2.9";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -1325,15 +1325,21 @@ function ShareDocCard({ e, docs, reload }) {
   }, [e.id]);
   useEffect(() => { load(); }, [load]);
   const open = async (path) => window.open(await signedUrl(path), "_blank");
-  async function upload(file) {
+  // one file: shown to the client under the name typed; several files: each under its own file name
+  async function upload(files) {
+    const list = [...files].filter((f) => { if (f.size > 50 * 1024 * 1024) { alert(`${f.name} is over 50 MB and was skipped.`); return false; } return true; });
+    if (!list.length) return;
     await run(async () => {
-      const path = `${e.id}/${Date.now()}-${file.name}`;
-      const { error } = await supabase.storage.from("deliverables").upload(path, file);
-      if (error) throw new Error(error.message);
-      const { error: e2 } = await supabase.from("documents").insert({ engagement_id: e.id, kind: "six_page_review", name: label || file.name, storage_path: `deliverables/${path}`, visibility: "client", uploaded_by: "staff" });
-      if (e2) throw new Error(e2.message);
+      for (const file of list) {
+        const path = `${e.id}/${Date.now()}-${file.name}`;
+        const { error } = await supabase.storage.from("deliverables").upload(path, file);
+        if (error) throw new Error(error.message);
+        const name = list.length === 1 && label.trim() ? label.trim() : file.name.replace(/\.[^.]+$/, "");
+        const { error: e2 } = await supabase.from("documents").insert({ engagement_id: e.id, kind: "six_page_review", name, storage_path: `deliverables/${path}`, visibility: "client", uploaded_by: "staff" });
+        if (e2) throw new Error(e2.message);
+      }
       await load();
-    }, "Shared with the client");
+    }, list.length === 1 ? "Shared with the client" : `${list.length} files shared with the client`);
   }
   const fromClient = docs.filter((d) => d.uploaded_at);
   return (
@@ -1354,8 +1360,8 @@ function ShareDocCard({ e, docs, reload }) {
             {shared.length === 0 && <span className="muted small">Nothing yet.</span>}
             {shared.map((d) => <div key={d.id} className="row between small"><span>{d.name}<div className="muted">{ago(d.created_at)}</div></span><button className="btn" onClick={() => open(d.storage_path)}>Open</button></div>)}
             <div className="row">
-              <input value={label} onChange={(x) => setLabel(x.target.value)} placeholder="Name shown to the client" style={{ flex: 1, padding: 8, borderRadius: 8, border: "1px solid var(--border)" }} />
-              <label className="btn" style={{ cursor: "pointer" }}>{busy ? "Uploading…" : "Upload"}<input type="file" style={{ display: "none" }} onChange={(x) => x.target.files[0] && upload(x.target.files[0])} /></label>
+              <input value={label} onChange={(x) => setLabel(x.target.value)} placeholder="Name shown to the client (one file)" style={{ flex: 1, padding: 8, borderRadius: 8, border: "1px solid var(--border)" }} />
+              <label className="btn" style={{ cursor: "pointer" }}>{busy ? "Uploading…" : "Upload"}<input type="file" multiple style={{ display: "none" }} onChange={(x) => { if (x.target.files?.length) upload(x.target.files); x.target.value = ""; }} /></label>
             </div>
           </div>
         </div>
@@ -1388,6 +1394,35 @@ function Checklist({ e, docs, reload }) {
     await reload();
   }, "Marked received");
 
+  // staff upload on the client's behalf: same bucket and path pattern as the portal, so the client sees it too
+  const tooBig = (f) => { if (f.size > 50 * 1024 * 1024) { alert(`${f.name} is ${(f.size / 1048576).toFixed(0)} MB; the limit is 50 MB.`); return true; } return false; };
+  const uploadFor = (d, file) => { if (!file || tooBig(file)) return; run(async () => {
+    const { data: me } = await supabase.auth.getUser();
+    const path = `${e.id}/${d.id}-${file.name}`;
+    const { error } = await supabase.storage.from("client-uploads").upload(path, file, { upsert: true });
+    if (error) throw new Error(error.message);
+    const { error: e2 } = await supabase.from("client_documents").update({ storage_path: `client-uploads/${path}`, uploaded_at: new Date().toISOString(), uploaded_by: `staff:${me.user.email}` }).eq("id", d.id);
+    if (e2) throw new Error(e2.message);
+    await reload();
+  }, `${d.label}: uploaded`); };
+  const uploadMany = (files) => { const list = [...files].filter((f) => !tooBig(f)); if (!list.length) return; run(async () => {
+    const { data: me } = await supabase.auth.getUser();
+    for (const file of list) {
+      const path = `${e.id}/extra-${Date.now()}-${file.name}`;
+      const { error } = await supabase.storage.from("client-uploads").upload(path, file, { upsert: true });
+      if (error) throw new Error(error.message);
+      const { error: e2 } = await supabase.from("client_documents").insert({ engagement_id: e.id, label: file.name, required: false, storage_path: `client-uploads/${path}`, uploaded_at: new Date().toISOString(), uploaded_by: `staff:${me.user.email}` });
+      if (e2) throw new Error(e2.message);
+    }
+    await reload();
+  }, `${list.length} file${list.length === 1 ? "" : "s"} uploaded`); };
+  const Pick = ({ onFile, children, multiple }) => (
+    <label className="btn" style={{ cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}>
+      {children}
+      <input type="file" multiple={multiple} disabled={busy} style={{ display: "none" }} onChange={(x) => { const fs = x.target.files; if (fs?.length) (multiple ? onFile(fs) : onFile(fs[0])); x.target.value = ""; }} />
+    </label>
+  );
+
   const presets = ["Audited financial statements, last 3 years", "Management accounts, year to date", "Budget / forecast", "Debt and lease schedule", "Fixed asset register", "Cap table / shareholder register"];
 
   return (
@@ -1398,8 +1433,9 @@ function Checklist({ e, docs, reload }) {
           <div key={d.id} className="row between small" style={{ padding: "6px 0", borderBottom: "1px solid var(--border-sub)" }}>
             <span>{d.uploaded_at ? "✓ " : "○ "}{d.label} {!d.required && <Chip>optional</Chip>}</span>
             <span className="row">
-              {d.uploaded_at ? <span className="row"><span className="muted">{ago(d.uploaded_at)}{d.uploaded_by?.startsWith("staff:") && " · by staff"}</span>{d.storage_path && <button className="btn" onClick={async () => window.open(await signedUrl(d.storage_path), "_blank")}>Open</button>}</span> : (
+              {d.uploaded_at ? <span className="row"><span className="muted">{ago(d.uploaded_at)}{d.uploaded_by?.startsWith("staff:") && " · by staff"}</span>{d.storage_path ? <button className="btn" onClick={async () => window.open(await signedUrl(d.storage_path), "_blank")}>Open</button> : <Pick onFile={(f) => uploadFor(d, f)}>Attach file</Pick>}</span> : (
                 <>
+                  <Pick onFile={(f) => uploadFor(d, f)}>Upload</Pick>
                   <button className="btn" disabled={busy} onClick={() => received(d.id)} title="Client sent it another way">Mark received</button>
                   {!locked && <button className="btn" disabled={busy} onClick={() => remove(d.id)}>Remove</button>}
                 </>
@@ -1407,6 +1443,10 @@ function Checklist({ e, docs, reload }) {
             </span>
           </div>
         ))}
+      </div>
+      <div className="row between small" style={{ marginTop: 12 }}>
+        <span className="muted">Got files by email? Upload them here; the client sees them on their page.</span>
+        <Pick multiple onFile={uploadMany}>Upload files</Pick>
       </div>
       {!locked && (
         <div className="stack" style={{ marginTop: 12 }}>
