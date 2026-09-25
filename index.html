@@ -174,7 +174,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "2.4";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "2.7";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -799,14 +799,13 @@ function ConvertForm({ lead, onCancel }) {
     company_country: lead.country === "CY" ? "" : (lead.country ?? ""),
     company_industry: Object.entries(c).find(([k]) => /industry/i.test(k))?.[1] ?? "",
     is_individual: false,
-    deposit: true,
     fee: "", approaches: ["dcf", "cca", "pt"],
   });
   const set = (k) => (x) => setF({ ...f, [k]: x.target.type === "checkbox" ? x.target.checked : x.target.value });
   const toggleA = (k) => setF((f) => ({ ...f, approaches: f.approaches.includes(k) ? f.approaches.filter((x) => x !== k) : [...f.approaches, k] }));
   async function create() {
     await run(async () => {
-      const e = await rpc("staff_create_engagement", { p_opportunity: lead.ghl_id, p_client_name: f.client_name, p_client_email: f.client_email, p_deposit: f.deposit });
+      const e = await rpc("staff_create_engagement", { p_opportunity: lead.ghl_id, p_client_name: f.client_name, p_client_email: f.client_email, p_deposit: false });
       const { error } = await supabase.from("engagements").update({
         client_title: f.client_title || null, company_name: f.is_individual ? null : (f.company_name || null),
         company_country: f.company_country || null, company_industry: f.company_industry || null, is_individual: f.is_individual,
@@ -830,10 +829,6 @@ function ConvertForm({ lead, onCancel }) {
       <div className="grid2">
         {!f.is_individual && <Field label="Company name"><input value={f.company_name} onChange={set("company_name")} /></Field>}
         <Field label="Country (optional, the client confirms it)"><input value={f.company_country} onChange={set("company_country")} placeholder="e.g. United Kingdom" /></Field>
-      </div>
-      <div className="card" style={{ padding: 12, background: "var(--sunken)" }}>
-        <label className="check" style={{ fontWeight: 600 }}><input type="checkbox" checked={f.deposit} onChange={set("deposit")} />Take a €1,000 deposit</label>
-        <div className="muted small" style={{ marginTop: 4 }}>{f.deposit ? (f.company_country ? "The deposit invoice goes out with the invitation and is credited against Invoice 1." : "The deposit invoice is issued as soon as the client confirms their country (it decides which company invoices), and is credited against Invoice 1.") : "No deposit. Invoice 1 will be the full first instalment (50%, capped at €5,000)."}</div>
       </div>
       <div className="grid2">
         <Field label="Fee agreed on the call (EUR, no VAT)"><input type="number" min="0" step="100" value={f.fee} onChange={set("fee")} placeholder="e.g. 5000" /></Field>
@@ -1075,7 +1070,7 @@ function EngagementDetail() {
         <div className="stack" style={{ gap: 16 }}>
           <ClientDetails e={e} reload={load} />
           <NotesCard e={e} contact={contact} reload={load} />
-          {e.deposit_required && <DepositCard e={e} deposit={deposit} reload={load} />}
+          {e.deposit_required ? <DepositCard e={e} deposit={deposit} reload={load} /> : <RequestDepositCard e={e} reload={load} />}
           <Invoices invoices={invoices} deposit={deposit} reload={load} />
           <Card title="Activity">
             {feed.length === 0 ? <span className="muted small">Nothing yet.</span> : (
@@ -1169,6 +1164,29 @@ function SendNdaStep({ e, agreements, reload }) {
         <a className="btn" href={`${PORTAL_URL}?as=${e.id}`} target="_blank" rel="noreferrer">Preview client's page</a>
       </div>
     </div>
+  );
+}
+
+/** The €1,000 deposit is not set at conversion; staff ask for it here when the time is right. */
+function RequestDepositCard({ e, reload }) {
+  const [run, busy] = useAction();
+  const open = ["nda_pending", "docs_pending", "review_pending", "proposal"].includes(e.stage);
+  if (!open) return null;
+  const noCountry = !e.company_country;
+  const request = () => {
+    if (!window.confirm(`Send ${e.client_name} a €1,000 deposit invoice now? It is credited against Invoice 1.`)) return;
+    run(async () => {
+      const inv = await rpc("staff_request_deposit", { p_engagement: e.id });
+      await callFn("engagement-send", { kind: "invoice_pdf", invoice_id: inv.id });
+      await reload();
+    }, "Deposit invoice issued and emailed to the client");
+  };
+  return (
+    <Card title="€1,000 deposit">
+      <p className="small" style={{ margin: "0 0 10px" }}>No deposit requested. When you want one, this issues the €1,000 invoice, emails it to the client and adds a Deposit step to their page. It is credited against Invoice 1.</p>
+      {noCountry && <div className="muted small" style={{ marginBottom: 10 }}>Available once the client confirms their country (it decides which company invoices).</div>}
+      <button className="btn" disabled={busy || noCountry} onClick={request}>Request €1,000 deposit</button>
+    </Card>
   );
 }
 
@@ -1484,7 +1502,7 @@ function ClientDetails({ e, reload }) {
   );
 }
 
-const entityFor = (c = "") => ["gb", "uk", "gbr", "united kingdom", "great britain", "england", "scotland", "wales", "northern ireland"].includes(c.trim().toLowerCase()) ? "Consortia Ltd (Cyprus)" : "Consortia Advisory LLP (UK)";
+const entityFor = (c) => { const k = String(c ?? "").trim().toLowerCase(); if (!k) return "Decided by the country the client confirms"; return ["gb", "uk", "gbr", "united kingdom", "great britain", "england", "scotland", "wales", "northern ireland"].includes(k) ? "Consortia Ltd (Cyprus)" : "Consortia Advisory LLP (UK)"; };
 
 function NotesCard({ e, contact, reload }) {
   const [run, busy] = useAction();
@@ -2335,7 +2353,7 @@ function Reports() {
         right={<div className="pills">{[["campaign", "Campaign"], ["adset", "Ad set"], ["ad", "Ad"]].map(([k, l]) => <button key={k} className={level === k ? "on" : ""} onClick={() => setLevel(k)}>{l}</button>)}</div>}>
         <div style={{ overflowX: "auto" }}>
           <table className="table">
-            <thead><tr><th>{level === "campaign" ? "Campaign" : level === "adset" ? "Ad set" : "Ad"}</th><th>Status</th><th className="num">Spend</th><th className="num">In EUR</th><th className="num">Impressions</th><th className="num">Clicks</th><th className="num">Leads</th><th className="num">Cost / lead</th><th className="num">Calls booked</th><th className="num">Engagements</th><th className="num">Fees signed</th><th className="num">Return</th></tr></thead>
+            <thead><tr><th>{level === "campaign" ? "Campaign" : level === "adset" ? "Ad set" : "Ad"}</th><th>Status</th><th className="num">Spend</th><th className="num">In EUR</th><th className="num">Impressions</th><th className="num">Clicks</th><th className="num">Leads</th><th className="num">Cost / lead</th><th className="num">Calls booked</th><th className="num">Cost / call</th><th className="num">Engagements</th><th className="num">Fees signed</th><th className="num">Return</th></tr></thead>
             <tbody>
               {ads.map((r) => (
                 <tr key={r.meta_id}>
@@ -2344,7 +2362,7 @@ function Reports() {
                   <td className="num">{usd(r.spend_usd)}</td><td className="num">{eur(r.spend_eur)}</td>
                   <td className="num">{Number(r.impressions).toLocaleString("en-GB")}</td><td className="num">{Number(r.clicks).toLocaleString("en-GB")}</td>
                   <td className="num">{r.leads}</td><td className="num">{per(r.spend_usd, r.leads, "USD")}</td>
-                  <td className="num">{r.calls_booked}</td><td className="num">{r.engagements}</td><td className="num">{eur(r.fees_eur)}</td><td className="num">{retOf(r)}</td>
+                  <td className="num">{r.calls_booked}</td><td className="num">{per(r.spend_usd, r.calls_booked, "USD")}</td><td className="num">{r.engagements}</td><td className="num">{eur(r.fees_eur)}</td><td className="num">{retOf(r)}</td>
                 </tr>
               ))}
               {ads.length > 0 && (
@@ -2352,10 +2370,10 @@ function Reports() {
                   <td>All</td><td></td><td className="num">{usd(tot.spend_usd)}</td><td className="num">{eur(tot.spend_eur)}</td>
                   <td className="num">{tot.impressions.toLocaleString("en-GB")}</td><td className="num">{tot.clicks.toLocaleString("en-GB")}</td>
                   <td className="num">{tot.leads}</td><td className="num">{per(tot.spend_usd, tot.leads, "USD")}</td>
-                  <td className="num">{tot.calls_booked}</td><td className="num">{tot.engagements}</td><td className="num">{eur(tot.fees_eur)}</td><td className="num">{retOf(tot)}</td>
+                  <td className="num">{tot.calls_booked}</td><td className="num">{per(tot.spend_usd, tot.calls_booked, "USD")}</td><td className="num">{tot.engagements}</td><td className="num">{eur(tot.fees_eur)}</td><td className="num">{retOf(tot)}</td>
                 </tr>
               )}
-              {ads.length === 0 && <tr><td colSpan="12" className="muted">{data ? "No spend in this period." : "Loading…"}</td></tr>}
+              {ads.length === 0 && <tr><td colSpan="13" className="muted">{data ? "No spend in this period." : "Loading…"}</td></tr>}
             </tbody>
           </table>
         </div>
