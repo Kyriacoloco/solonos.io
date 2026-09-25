@@ -174,7 +174,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "2.11";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "2.12";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useState } from "https://esm.sh/react@18.3.1";
@@ -1392,7 +1392,7 @@ function ShareDocCard({ e, docs, reload }) {
         const { error } = await supabase.storage.from("deliverables").upload(path, file);
         if (error) throw new Error(error.message);
         const name = list.length === 1 && label.trim() ? label.trim() : file.name.replace(/\.[^.]+$/, "");
-        const { error: e2 } = await supabase.from("documents").insert({ engagement_id: e.id, kind: "six_page_review", name, storage_path: `deliverables/${path}`, visibility: "client", uploaded_by: "staff" });
+        const { error: e2 } = await supabase.from("documents").insert({ engagement_id: e.id, kind: "other", name, storage_path: `deliverables/${path}`, visibility: "client", uploaded_by: "staff" });
         if (e2) throw new Error(e2.message);
       }
       await load();
