@@ -222,7 +222,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "2.15";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "2.16";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -518,6 +518,8 @@ function Leads() {
   const [pendingLost, setPendingLost] = useState(null);   // { id, stageId } waiting for a reason
   const boardRef = useRef(null);
   const [activeCol, setActiveCol] = useState(0);
+  const [layout, setLayout] = useState(null);   // { order: [keys], hidden: [keys] } from Settings
+  useEffect(() => { supabase.from("app_settings").select("value").eq("key", "leads_board").maybeSingle().then(({ data }) => setLayout(data?.value ?? null)); }, []);
 
   const load = useCallback(async () => {
     const [s, l, e, sy] = await Promise.all([
@@ -574,9 +576,13 @@ function Leads() {
       {rows.map((l) => <LeadCard key={l.ghl_id} l={l} eng={engOf(l)} onOpen={() => setOpen(l)} draggable={!!stageId} />)}
     </div>
   );
-  const colNames = [...shownStages.map((st) => [st.name, inGhl.filter((l) => l.stage_id === st.ghl_id).length]),
-    ["Invited", leads.filter((l) => engOf(l) && SENT.includes(engOf(l).stage)).length],
-    ["Engaged", leads.filter((l) => engOf(l) && ENGAGED.includes(engOf(l).stage)).length]];
+  const allCols = [
+    ...shownStages.map((st) => ({ key: st.ghl_id, title: st.name, rows: inGhl.filter((l) => l.stage_id === st.ghl_id), stageId: st.ghl_id })),
+    { key: "__invited", title: "Invited", rows: leads.filter((l) => engOf(l) && SENT.includes(engOf(l).stage)) },
+    { key: "__engaged", title: "Engaged", rows: leads.filter((l) => engOf(l) && ENGAGED.includes(engOf(l).stage)) },
+  ];
+  const cols = applyBoardLayout(allCols, layout);
+  const colNames = cols.map((c) => [c.title, c.rows.length]);
   const goCol = (i) => { const c = boardRef.current?.children[i]; if (c) boardRef.current.scrollTo({ left: c.offsetLeft - boardRef.current.offsetLeft, behavior: "smooth" }); };
   const onBoardScroll = () => {
     const b = boardRef.current; if (!b || !b.children.length) return;
@@ -591,9 +597,7 @@ function Leads() {
         {colNames.map(([n, c], i) => <button key={n} className={i === activeCol ? "on" : ""} onClick={() => goCol(i)}>{n} · {c}</button>)}
       </div>
       <div className="board" ref={boardRef} onScroll={onBoardScroll}>
-        {shownStages.map((st) => col(st.name, inGhl.filter((l) => l.stage_id === st.ghl_id), st.ghl_id))}
-        {col("Invited", leads.filter((l) => engOf(l) && SENT.includes(engOf(l).stage)))}
-        {col("Engaged", leads.filter((l) => engOf(l) && ENGAGED.includes(engOf(l).stage)))}
+        {cols.map((c) => col(c.title, c.rows, c.stageId))}
       </div>
       {open && <LeadDrawer lead={open} engagement={engByOpp[open.ghl_id]} onClose={() => setOpen(null)} reload={load}
         stages={shownStages} onMove={(stageId) => { const id = open.ghl_id; setOpen(null); dropTo(id, stageId); }} />}
@@ -1824,6 +1828,81 @@ function describe(f, who = "Client") {
 
 // ===================== pages/ValuationBuilder.jsx =====================
 // The Valuation Builder is a standalone single-file app (public/valuation-builder.html) shown inside Solonos.
+/** Order and hide board columns per the saved layout; columns the layout doesn't know keep their default place. */
+function applyBoardLayout(cols, layout) {
+  if (!layout) return cols;
+  const order = layout.order ?? [], hidden = new Set(layout.hidden ?? []);
+  const rank = (c, i) => { const k = order.indexOf(c.key); return k === -1 ? 1000 + i : k; };
+  return cols.map((c, i) => ({ c, r: rank(c, i) })).sort((a, b) => a.r - b.r).map((x) => x.c).filter((c) => !hidden.has(c.key));
+}
+
+// ===================== pages/Settings.jsx =====================
+function Settings() {
+  return (
+    <>
+      <div className="pagehead"><div><h1>Settings</h1><p>How Solonos looks and works for you.</p></div></div>
+      <BoardSettings />
+    </>
+  );
+}
+
+function BoardSettings() {
+  const [run, busy] = useAction();
+  const [rows, setRows] = useState(null);     // [{ key, title, hidden }]
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    (async () => {
+      const [{ data: st }, { data: saved }] = await Promise.all([
+        supabase.from("pipeline_stages").select("ghl_id,name,position").order("position"),
+        supabase.from("app_settings").select("value").eq("key", "leads_board").maybeSingle(),
+      ]);
+      const base = [...(st ?? []).map((x) => ({ key: x.ghl_id, title: x.name })), { key: "__invited", title: "Invited" }, { key: "__engaged", title: "Engaged" }];
+      const layout = saved?.value ?? null, hidden = new Set(layout?.hidden ?? []);
+      const ordered = layout ? applyBoardLayout(base, { order: layout.order }) : base;
+      setRows(ordered.map((r) => ({ ...r, hidden: hidden.has(r.key) })));
+    })();
+  }, []);
+  const move = (i, d) => { const j = i + d; if (j < 0 || j >= rows.length) return; const n = [...rows]; [n[i], n[j]] = [n[j], n[i]]; setRows(n); setDirty(true); };
+  const toggle = (i) => { const n = [...rows]; n[i] = { ...n[i], hidden: !n[i].hidden }; setRows(n); setDirty(true); };
+  const reset = () => { setRows([...rows].sort((a, b) => (a.key.startsWith("__") ? 1 : 0) - (b.key.startsWith("__") ? 1 : 0))); setDirty(true); };
+  const save = () => run(async () => {
+    const { data: me } = await supabase.auth.getUser();
+    const value = { order: rows.map((r) => r.key), hidden: rows.filter((r) => r.hidden).map((r) => r.key) };
+    const { error } = await supabase.from("app_settings").upsert({ key: "leads_board", value, updated_at: new Date().toISOString(), updated_by: me?.user?.id ?? null });
+    if (error) throw new Error(error.message);
+    setDirty(false);
+  }, "Board layout saved");
+  return (
+    <Card title="Leads board columns" right={<span className="muted small">Changes Solonos only; GHL stays as it is</span>}>
+      {!rows ? <span className="muted small">Loading…</span> : (
+        <>
+          <p className="muted small" style={{ margin: "0 0 12px" }}>Put the columns in the order you want them, left to right. Untick a column to hide it from the board; its leads stay in GHL and in Reports. Columns with no leads yet only show up once a lead arrives there.</p>
+          <div className="stack" style={{ gap: 6 }}>
+            {rows.map((r, i) => (
+              <div key={r.key} className="row between" style={{ padding: "8px 10px", border: "1px solid var(--border-sub)", borderRadius: 8, background: r.hidden ? "var(--sunken)" : "var(--surface)", flexWrap: "nowrap" }}>
+                <label className="row" style={{ gap: 10, flexWrap: "nowrap", minWidth: 0 }}>
+                  <input type="checkbox" checked={!r.hidden} onChange={() => toggle(i)} />
+                  <span style={{ opacity: r.hidden ? 0.5 : 1, fontWeight: 500 }}>{r.title}</span>
+                  {r.key.startsWith("__") && <span className="muted small">Solonos</span>}
+                </label>
+                <span className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
+                  <button className="btn" disabled={i === 0} onClick={() => move(i, -1)} aria-label={`Move ${r.title} up`}>↑</button>
+                  <button className="btn" disabled={i === rows.length - 1} onClick={() => move(i, 1)} aria-label={`Move ${r.title} down`}>↓</button>
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 14 }}>
+            <button className="btn primary" disabled={busy || !dirty} onClick={save}>Save layout</button>
+            <button className="btn" disabled={busy} onClick={reset}>GHL order</button>
+            {dirty && <span className="muted small">Unsaved changes</span>}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
 function ValuationBuilder() {
   // fixed once per visit: a new value on every re-render (bell, version check) reloaded the builder and made it flash
   const [src] = useState(() => `/ConsortiaValuationBuilder.html?v=${Date.now()}`);
@@ -2607,6 +2686,7 @@ const NAV = [
   ["Time", "/app/time", 4],
   ["Invoices", "/app/invoices", 3],
   ["Reports", "/app/reports"],
+  ["Settings", "/app/settings"],
 ];
 
 function SetPassword() {
@@ -2665,6 +2745,7 @@ function Shell({ session, staff, signOut }) {
           <Route path="/app/engagements" element={<Engagements />} />
           <Route path="/app/engagements/:id" element={<EngagementDetail />} />
           <Route path="/app/valuation-builder" element={<ValuationBuilder />} />
+          <Route path="/app/settings" element={<Settings />} />
           <Route path="/app/*" element={<Soon />} />
           <Route path="*" element={<Navigate to="/app/leads" replace />} />
         </Routes>
