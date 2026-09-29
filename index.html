@@ -222,7 +222,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "2.16";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "2.17";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -710,6 +710,86 @@ function NotesLog({ opportunityId, engagementId, title = "My notes" }) {
 }
 
 /** Valuation Builder PDFs attached to a lead; they follow the lead into its engagement. */
+/** NDA made on the lead, before any engagement. Generate it (and optionally email it), then upload the signed copy.
+ *  Both follow the lead into the engagement on conversion, where the signed copy marks the NDA signed. */
+function LeadNda({ lead }) {
+  const [run, busy] = useAction();
+  const [docs, setDocs] = useState([]);
+  const [form, setForm] = useState(null);
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("documents").select("*").eq("opportunity_id", lead.ghl_id).eq("kind", "nda").order("created_at", { ascending: false });
+    setDocs(data ?? []);
+  }, [lead.ghl_id]);
+  useEffect(() => { load(); }, [load]);
+  const last = docs.find((d) => !d.meta?.signed)?.meta;
+  const openForm = () => setForm({
+    is_individual: last?.is_individual ?? false,
+    party_name: last?.party_name ?? (lead.company || ""),
+    signatory_name: last?.signatory_name ?? [lead.first_name, lead.last_name].filter(Boolean).join(" "),
+    signatory_title: last?.signatory_title ?? "Director",
+    email: last?.email ?? (lead.email || ""),
+    address: last?.address ?? "",
+    country: last?.country ?? (lead.country === "CY" ? "" : (lead.country || "")),
+  });
+  const set = (k) => (x) => setForm({ ...form, [k]: x.target.type === "checkbox" ? x.target.checked : x.target.value });
+  const generate = (send) => run(async () => {
+    const party = form.is_individual ? form.signatory_name : form.party_name;
+    await callFn("engagement-send", { kind: "lead_nda", opportunity_id: lead.ghl_id, ...form, party_name: party, send });
+    setForm(null); await load();
+  }, send ? "NDA generated and emailed to the client" : "NDA generated");
+  const uploadSigned = (file, src) => { if (!file) return; run(async () => {
+    const clean = file.name.replace(/[^A-Za-z0-9._-]+/g, "-");
+    const path = `leads/${lead.ghl_id}/${Date.now()}-NDA-signed-${clean}`;
+    const { error } = await supabase.storage.from("deliverables").upload(path, file);
+    if (error) throw new Error(error.message);
+    const meta = { ...(src?.meta ?? {}), signed: true, signed_on: new Date().toISOString().slice(0, 10) };
+    const { error: e2 } = await supabase.from("documents").insert({ opportunity_id: lead.ghl_id, kind: "nda", name: `NDA - ${meta.party_name || lead.name.split("|")[0].trim()} - signed`, storage_path: `deliverables/${path}`, visibility: "internal", uploaded_by: "staff", meta });
+    if (e2) throw new Error(e2.message);
+    await load();
+  }, "Signed NDA saved on the lead"); };
+  const open = async (d) => window.open(await signedUrl(d.storage_path), "_blank");
+  const hasSigned = docs.some((d) => d.meta?.signed);
+  return (
+    <>
+      <h3>NDA</h3>
+      {docs.length === 0 && !form && <p className="muted small" style={{ margin: "0 0 8px" }}>No NDA yet. Create one here before converting; it follows the lead into the engagement.</p>}
+      {docs.map((d) => (
+        <div key={d.id} className="row between small" style={{ marginBottom: 6 }}>
+          <span>{d.name}{d.meta?.signed ? <span style={{ color: "var(--ok)" }}> ✓</span> : null}<div className="muted">{ago(d.created_at)}{d.meta?.sent_at ? ` · emailed to ${d.meta.email}` : ""}</div></span>
+          <span className="row">
+            {!d.meta?.signed && !hasSigned && <label className="btn" style={{ cursor: "pointer" }}>Upload signed copy<input type="file" accept=".pdf,image/*" style={{ display: "none" }} onChange={(x) => { uploadSigned(x.target.files?.[0], d); x.target.value = ""; }} /></label>}
+            <button className="btn" onClick={() => open(d)}>Open</button>
+          </span>
+        </div>
+      ))}
+      {!form ? (
+        !hasSigned && <button className="btn" disabled={busy} onClick={openForm} style={{ marginBottom: 16 }}>{docs.length ? "Create a new NDA" : "Create NDA"}</button>
+      ) : (
+        <div className="card" style={{ padding: 12, background: "var(--sunken)", marginBottom: 16 }}>
+          <div className="stack" style={{ gap: 10 }}>
+            <label className="check"><input type="checkbox" checked={form.is_individual} onChange={set("is_individual")} />Signing as an individual, not a company</label>
+            {!form.is_individual && <Field label="Company name (the party on the NDA)"><input value={form.party_name} onChange={set("party_name")} /></Field>}
+            <div className="grid2">
+              <Field label="Signatory full name"><input value={form.signatory_name} onChange={set("signatory_name")} /></Field>
+              <Field label="Title"><input value={form.signatory_title} onChange={set("signatory_title")} placeholder="Director" /></Field>
+            </div>
+            <Field label={form.is_individual ? "Home address" : "Registered address"}><input value={form.address} onChange={set("address")} placeholder="Street, city, postcode" /></Field>
+            <div className="grid2">
+              {!form.is_individual && <Field label="Country of incorporation"><input value={form.country} onChange={set("country")} placeholder="e.g. Italy" /></Field>}
+              <Field label="Email (only if you email it now)"><input type="email" value={form.email} onChange={set("email")} /></Field>
+            </div>
+            <div className="row">
+              <button className="btn primary" disabled={busy || !form.address || (form.is_individual ? !form.signatory_name : !(form.party_name && form.country))} onClick={() => generate(false)}>Generate NDA</button>
+              <button className="btn" disabled={busy || !form.email || !form.address || (form.is_individual ? !form.signatory_name : !(form.party_name && form.country))} onClick={() => generate(true)}>Generate and email to client</button>
+              <button className="btn" disabled={busy} onClick={() => setForm(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 /** The email that carries the Market Example Range after Call 1. Edit the wording here. */
 function builderEmail({ first, company, personal }) {
   const p = (t) => `<p style="margin:0 0 14px">${t}</p>`;
@@ -875,15 +955,34 @@ function ConvertForm({ lead, onCancel }) {
   });
   const set = (k) => (x) => setF({ ...f, [k]: x.target.type === "checkbox" ? x.target.checked : x.target.value });
   const toggleA = (k) => setF((f) => ({ ...f, approaches: f.approaches.includes(k) ? f.approaches.filter((x) => x !== k) : [...f.approaches, k] }));
+  // an NDA made on the lead fills the form and, if it came back signed, carries over as signed
+  const [ndaDocs, setNdaDocs] = useState([]);
+  useEffect(() => {
+    supabase.from("documents").select("*").eq("opportunity_id", lead.ghl_id).eq("kind", "nda").order("created_at", { ascending: false })
+      .then(({ data }) => {
+        setNdaDocs(data ?? []);
+        const m = (data ?? []).find((d) => d.meta)?.meta;
+        if (m) setF((cur) => ({ ...cur, client_name: m.signatory_name || cur.client_name, client_title: m.signatory_title || cur.client_title,
+          client_email: m.email || cur.client_email, company_name: m.is_individual ? cur.company_name : (m.party_name || cur.company_name),
+          company_country: m.country || cur.company_country, is_individual: !!m.is_individual }));
+      });
+  }, [lead.ghl_id]);
   async function create() {
     await run(async () => {
       const e = await rpc("staff_create_engagement", { p_opportunity: lead.ghl_id, p_client_name: f.client_name, p_client_email: f.client_email, p_deposit: false });
+      const ndaMeta = ndaDocs.find((d) => d.meta)?.meta;
+      const signedNda = ndaDocs.find((d) => d.meta?.signed);
       const { error } = await supabase.from("engagements").update({
         client_title: f.client_title || null, company_name: f.is_individual ? null : (f.company_name || null),
         company_country: f.company_country || null, company_industry: f.company_industry || null, is_individual: f.is_individual,
         fee: f.fee ? Number(f.fee) : null, approaches: f.approaches,
+        ...(ndaMeta?.address ? { company_address: ndaMeta.address } : {}),
       }).eq("id", e.id);
       if (error) throw new Error(error.message);
+      if (signedNda) {
+        await rpc("staff_record_nda_offline", { p_engagement: e.id, p_signed_pdf_path: signedNda.storage_path, p_signed_on: signedNda.meta.signed_on || new Date().toISOString().slice(0, 10) });
+        if (ndaMeta?.address && (f.company_country || f.is_individual)) await rpc("staff_confirm_details", { p_engagement: e.id }).catch(() => null);
+      }
       nav(`/app/engagements/${e.id}`);
     });
   }
@@ -892,6 +991,7 @@ function ConvertForm({ lead, onCancel }) {
     <div className="stack">
       <h3>Convert to engagement</h3>
       <p className="muted small" style={{ margin: 0 }}>Only the name and email are needed. The client completes the company details on their own page; everything else follows from that.</p>
+      {ndaDocs.some((d) => d.meta?.signed) && <div className="note small" style={{ color: "var(--ok)" }}>✓ Signed NDA on this lead: the engagement starts with the NDA signed and the details confirmed.</div>}
       <Field label="Signatory full name (as it will appear on the NDA and letter)"><input value={f.client_name} onChange={set("client_name")} /></Field>
       <div className="grid2">
         <Field label="Title"><input value={f.client_title} onChange={set("client_title")} placeholder="Director" /></Field>
@@ -1005,6 +1105,7 @@ function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove }) {
       </dl>
 
       <Intake custom={lead.custom} />
+      <LeadNda lead={lead} />
       <LeadBuilders lead={lead} reload={reload} />
 
       <h3>Call recordings</h3>
