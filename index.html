@@ -222,7 +222,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.0";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.1";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -910,34 +910,17 @@ function TouchHistory({ touches }) {
   );
 }
 
-/** Dashboard: everything due today, overdue first. */
+/** Dashboard: everything due today, overdue first (tasks and follow-up touches). */
 function TodayBox() {
+  const [run, busy] = useAction();
   const [rows, setRows] = useState(null);
-  const [seq, setSeq] = useState(null);
-  useEffect(() => {
-    (async () => {
-      const today = new Date().toISOString().slice(0, 10);
-      const [{ data: r }, { data: s }] = await Promise.all([
-        supabase.from("followup_board").select("*").lte("next_due", today).order("next_due"),
-        supabase.from("app_settings").select("value").eq("key", "followups").maybeSingle(),
-      ]);
-      setRows(r ?? []); setSeq(s?.value ?? null);
-    })();
-  }, []);
+  const load = useCallback(async () => { const { rows } = await loadDue(isoToday()); setRows(rows); }, []);
+  useEffect(() => { load(); }, [load]);
+  const done = (r) => run(() => rpc("task_done", { p_task: r.id }).then(load), "Done");
   return (
-    <Card title="Today" right={<NavLink to="/app/leads" className="btn">Open leads</NavLink>} style={{ marginBottom: 18 }}>
-      {!rows ? <span className="muted small">Loading…</span> : rows.length === 0 ? <span className="muted">No follow-ups due today.</span> : (
-        <div className="stack" style={{ gap: 6 }}>
-          {rows.map((f) => {
-            const st = f.status === "checkin" ? null : seq?.[f.kind]?.steps?.[f.step - 1];
-            return (
-              <NavLink key={f.followup_id} to={`/app/leads?open=${encodeURIComponent(f.opportunity_id)}`} className="row between" style={{ padding: "8px 10px", border: "1px solid var(--border-sub)", borderRadius: 8, background: "var(--surface)", textDecoration: "none", color: "inherit" }}>
-                <span><b>{f.name.split("|")[0].trim()}</b> <span className="muted small">{f.status === "checkin" ? "90-day check-in" : `${FU_KIND_LABEL[f.kind]} · Day ${st?.day ?? "?"} · ${st?.title ?? ""}`}</span></span>
-                <FollowupChip f={f} seq={seq} />
-              </NavLink>
-            );
-          })}
-        </div>
+    <Card title="Today" right={<NavLink to="/app/tasks" className="btn">All tasks</NavLink>} style={{ marginBottom: 18 }}>
+      {!rows ? <span className="muted small">Loading…</span> : rows.length === 0 ? <span className="muted">Nothing due today.</span> : (
+        <div className="stack" style={{ gap: 6 }}>{rows.map((r) => <TaskRow key={r.type + r.id} r={r} onDone={done} busy={busy} />)}</div>
       )}
     </Card>
   );
@@ -986,6 +969,128 @@ function FollowupSettings() {
   );
 }
 
+
+// ===================== Tasks =====================
+const TASK_KINDS = [["call", "Call"], ["whatsapp", "WhatsApp"], ["voicenote", "Voice note"], ["email", "Email"], ["meeting", "Meeting"], ["other", "Other"]];
+const taskKindLabel = (k) => (TASK_KINDS.find(([v]) => v === k) ?? [k, k])[1];
+const isoToday = () => new Date().toISOString().slice(0, 10);
+const addDaysIso = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const dueWord = (iso) => { const t = new Date(); t.setHours(0, 0, 0, 0); const d = new Date(iso + "T00:00:00"); const n = Math.round((d - t) / 86400000); return n < 0 ? `${-n}d overdue` : n === 0 ? "today" : n === 1 ? "tomorrow" : d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }); };
+
+/** Loads what is due: your tasks plus follow-up touches, merged and sorted. */
+async function loadDue(untilIso) {
+  const [{ data: t }, { data: f }, { data: s }] = await Promise.all([
+    supabase.from("tasks_board").select("*").lte("due_on", untilIso).order("due_on"),
+    supabase.from("followup_board").select("*").lte("next_due", untilIso).order("next_due"),
+    supabase.from("app_settings").select("value").eq("key", "followups").maybeSingle(),
+  ]);
+  const seq = s?.value ?? null;
+  const rows = [
+    ...(t ?? []).map((x) => ({ type: "task", id: x.id, due: x.due_on, who: x.who, first_name: x.first_name, phone: x.phone, email: x.email, kind: x.kind, title: x.title, note: x.note, opportunity_id: x.opportunity_id, engagement_id: x.engagement_id })),
+    ...(f ?? []).map((x) => {
+      const st = x.status === "checkin" ? null : seq?.[x.kind]?.steps?.[x.step - 1];
+      const ch = x.status === "checkin" ? "other" : String(st?.channel ?? "").split("+")[0] || "other";
+      return { type: "followup", id: x.followup_id, due: x.next_due, who: x.name, first_name: x.first_name, phone: x.phone, email: x.email, kind: ch === "call" && String(st?.channel).includes("voicemail") ? "call" : ch, title: x.status === "checkin" ? "90-day check-in" : `${FU_KIND_LABEL[x.kind]} · Day ${st?.day ?? "?"} · ${st?.title ?? ""}`, opportunity_id: x.opportunity_id, f: x, seq };
+    }),
+  ].sort((a, b) => a.due.localeCompare(b.due) || (a.who ?? "").localeCompare(b.who ?? ""));
+  return { rows, seq };
+}
+
+function TaskRow({ r, onDone, busy }) {
+  const link = r.opportunity_id ? `/app/leads?open=${encodeURIComponent(r.opportunity_id)}` : r.engagement_id ? `/app/engagements/${r.engagement_id}` : null;
+  const n = (() => { const t = new Date(); t.setHours(0, 0, 0, 0); return Math.round((new Date(r.due + "T00:00:00") - t) / 86400000); })();
+  const digits = String(r.phone ?? "").replace(/[^0-9]/g, "");
+  return (
+    <div className="row between" style={{ padding: "10px 12px", border: "1px solid var(--border-sub)", borderLeft: `4px solid ${n < 0 ? "var(--danger)" : n === 0 ? "var(--accent)" : "var(--border)"}`, borderRadius: 8, background: "var(--surface)", gap: 10 }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 600 }}>{r.who ? r.who.split("|")[0].trim() : "General"} <Chip>{taskKindLabel(r.kind)}</Chip></div>
+        <div className="small" style={{ color: "var(--text-2)" }}>{r.title}{r.note ? ` · ${r.note}` : ""}</div>
+        <div className="muted small">{dueWord(r.due)}{r.type === "followup" ? " · follow-up" : ""}</div>
+      </div>
+      <div className="row" style={{ flexWrap: "nowrap", gap: 6 }}>
+        {digits && (r.kind === "call") && <a className="btn" href={`tel:${r.phone}`}>Call</a>}
+        {digits && (r.kind === "whatsapp" || r.kind === "voicenote") && <a className="btn" href={`https://wa.me/${digits}`} target="_blank" rel="noreferrer">WhatsApp</a>}
+        {r.email && r.kind === "email" && <a className="btn" href={`mailto:${r.email}`}>Email</a>}
+        {link && <NavLink className="btn" to={link}>Open</NavLink>}
+        {r.type === "task" && <button className="btn primary" disabled={busy} onClick={() => onDone(r)}>Done</button>}
+      </div>
+    </div>
+  );
+}
+
+function AddTask({ opportunityId, engagementId, onAdded, compact }) {
+  const [run, busy] = useAction();
+  const [open, setOpen] = useState(!compact);
+  const [f, setF] = useState({ title: "", kind: "call", due_on: isoToday() });
+  const add = () => run(async () => {
+    if (!f.title.trim()) throw new Error("What is the task?");
+    const { data: me } = await supabase.auth.getUser();
+    const { error } = await supabase.from("lead_tasks").insert({ opportunity_id: opportunityId ?? null, engagement_id: engagementId ?? null, title: f.title.trim(), kind: f.kind, due_on: f.due_on, created_by: me?.user?.email ?? "staff" });
+    if (error) throw new Error(error.message);
+    setF({ title: "", kind: "call", due_on: isoToday() }); if (compact) setOpen(false); await onAdded?.();
+  }, "Task added");
+  if (!open) return <button className="btn" onClick={() => setOpen(true)}>Add task</button>;
+  return (
+    <div className="row wrap" style={{ gap: 6 }}>
+      <input value={f.title} onChange={(x) => setF({ ...f, title: x.target.value })} onKeyDown={(x) => x.key === "Enter" && add()} placeholder="e.g. Send voice note about the range" style={{ flex: 1, minWidth: 200 }} />
+      <select value={f.kind} onChange={(x) => setF({ ...f, kind: x.target.value })}>{TASK_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+      <input type="date" value={f.due_on} onChange={(x) => setF({ ...f, due_on: x.target.value })} />
+      <div className="row" style={{ gap: 4 }}>{[["Today", 0], ["Tmrw", 1], ["+3d", 3], ["+1w", 7]].map(([l, n]) => <button key={l} className={`btn${f.due_on === addDaysIso(n) ? " primary" : ""}`} onClick={() => setF({ ...f, due_on: addDaysIso(n) })}>{l}</button>)}</div>
+      <button className="btn primary" disabled={busy} onClick={add}>Add</button>
+      {compact && <button className="btn" onClick={() => setOpen(false)}>Cancel</button>}
+    </div>
+  );
+}
+
+/** Tasks on a lead (drawer section). */
+function LeadTasks({ lead }) {
+  const [run, busy] = useAction();
+  const [tasks, setTasks] = useState([]);
+  const load = useCallback(async () => { const { data } = await supabase.from("lead_tasks").select("*").eq("opportunity_id", lead.ghl_id).order("done_at", { ascending: true, nullsFirst: true }).order("due_on"); setTasks(data ?? []); }, [lead.ghl_id]);
+  useEffect(() => { load(); }, [load]);
+  const done = (t) => run(() => rpc("task_done", { p_task: t.id }).then(load), "Done");
+  const remove = (t) => run(async () => { const { error } = await supabase.from("lead_tasks").delete().eq("id", t.id); if (error) throw new Error(error.message); await load(); }, "Task removed");
+  const open = tasks.filter((t) => !t.done_at), closed = tasks.filter((t) => t.done_at).slice(0, 5);
+  return (
+    <>
+      <h3>Tasks</h3>
+      {open.length === 0 && <p className="muted small" style={{ margin: "0 0 8px" }}>No open tasks for this lead.</p>}
+      {open.map((t) => (
+        <div key={t.id} className="row between small" style={{ marginBottom: 6 }}>
+          <span><b>{t.title}</b> <span className="muted">· {taskKindLabel(t.kind)} · {dueWord(t.due_on)}</span></span>
+          <span className="row"><button className="btn primary" disabled={busy} onClick={() => done(t)}>Done</button><button className="btn" disabled={busy} onClick={() => remove(t)}>Remove</button></span>
+        </div>
+      ))}
+      <div style={{ margin: "6px 0 8px" }}><AddTask opportunityId={lead.ghl_id} onAdded={load} compact /></div>
+      {closed.length > 0 && <div className="muted small" style={{ marginBottom: 12 }}>{closed.map((t) => <div key={t.id}>✓ {t.title} · {day(t.done_at)}</div>)}</div>}
+    </>
+  );
+}
+
+/** The Tasks page: today, overdue, the week ahead, plus a quick add. */
+function Tasks() {
+  const [run, busy] = useAction();
+  const [rows, setRows] = useState(null);
+  const [view, setView] = useState("today");
+  const load = useCallback(async () => { const { rows } = await loadDue(addDaysIso(30)); setRows(rows); }, []);
+  useEffect(() => { load(); }, [load]);
+  const today = isoToday(), week = addDaysIso(7);
+  const shown = (rows ?? []).filter((r) => view === "today" ? r.due <= today : view === "week" ? r.due > today && r.due <= week : r.due > week);
+  const counts = { today: (rows ?? []).filter((r) => r.due <= today).length, week: (rows ?? []).filter((r) => r.due > today && r.due <= week).length, later: (rows ?? []).filter((r) => r.due > week).length };
+  const done = (r) => run(() => rpc("task_done", { p_task: r.id }).then(load), "Done");
+  return (
+    <>
+      <div className="pagehead">
+        <div><h1>Tasks</h1><p className="hide-sm">Your calls, voice notes and emails for the day, with the follow-up touches that are due.</p></div>
+        <div className="pills">{[["today", `Today · ${counts.today}`], ["week", `This week · ${counts.week}`], ["later", `Later · ${counts.later}`]].map(([k, l]) => <button key={k} className={view === k ? "on" : ""} onClick={() => setView(k)}>{l}</button>)}</div>
+      </div>
+      <Card title="Add a task" style={{ marginBottom: 16 }}><AddTask onAdded={load} /></Card>
+      {!rows ? <span className="muted small">Loading…</span> : shown.length === 0 ? <Empty title={view === "today" ? "Nothing due today" : "Nothing here"}>Add a task above, or start a follow-up on a lead.</Empty> : (
+        <div className="stack" style={{ gap: 8 }}>{shown.map((r) => <TaskRow key={r.type + r.id} r={r} onDone={done} busy={busy} />)}</div>
+      )}
+    </>
+  );
+}
 
 /** NDA made on the lead, before any engagement. Generate it (and optionally email it), then upload the signed copy.
  *  Both follow the lead into the engagement on conversion, where the signed copy marks the NDA signed. */
@@ -1387,6 +1492,7 @@ function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove, fu, seq
 
       <Intake custom={lead.custom} />
       {!engagement && <LeadFollowup lead={lead} fu={fu} seq={seq} reload={reload} onConvert={() => setConvert(true)} onLost={onLost} />}
+      <LeadTasks lead={lead} />
       <LeadNda lead={lead} />
       <LeadBuilders lead={lead} reload={reload} />
 
@@ -3072,6 +3178,7 @@ const NAV = [
   ["Documents", "/app/documents", 5],
   ["Time", "/app/time", 4],
   ["Invoices", "/app/invoices", 3],
+  ["Tasks", "/app/tasks"],
   ["Reports", "/app/reports"],
   ["Settings", "/app/settings"],
 ];
@@ -3133,6 +3240,7 @@ function Shell({ session, staff, signOut }) {
           <Route path="/app/engagements/:id" element={<EngagementDetail />} />
           <Route path="/app/valuation-builder" element={<ValuationBuilder />} />
           <Route path="/app/settings" element={<Settings />} />
+          <Route path="/app/tasks" element={<Tasks />} />
           <Route path="/app/*" element={<Soon />} />
           <Route path="*" element={<Navigate to="/app/leads" replace />} />
         </Routes>
