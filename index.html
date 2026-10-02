@@ -222,7 +222,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.1";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.2";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -586,20 +586,35 @@ function Leads() {
     if (ok && reason) await run(() => rpc("set_lost_reason", { p_opportunity_id: id, p_reason: reason }).then(load));
     if (ok && after) await after();
   };
-  const col = (title, rows, stageId) => (
+  // drag onto a Ghost / 90-day column: start that follow-up (switching if one is open); drag out to a GHL column: stop it, then move
+  const dropToFollowup = (id, kind) => run(async () => {
+    const cur = fuByOpp[id];
+    if (cur && ((kind === "checkin" && cur.status === "checkin") || (cur.status === "active" && cur.kind === kind))) return;
+    if (cur) await rpc("followup_cancel", { p_followup: cur.id });
+    await rpc("followup_start", { p_opportunity: id, p_kind: kind });
+    try { await supabase.functions.invoke("ghl-sync", { body: { action: "note", opportunity_id: id, body: `Solonos: follow-up started (${FU_KIND_LABEL[kind]})` } }); } catch (e) { /* best effort */ }
+    await load();
+  }, kind === "checkin" ? "On the 90-day list" : `Follow-up started (${FU_KIND_LABEL[kind]})`);
+  const dropFromFollowup = async (id, stageId) => {
+    const cur = fuByOpp[id];
+    if (cur) { const ok = await run(() => rpc("followup_cancel", { p_followup: cur.id }).then(load), "Follow-up stopped"); if (!ok) return; }
+    const l = leads.find((x) => x.ghl_id === id);
+    if (l && l.stage_id !== stageId) dropTo(id, stageId);
+  };
+  const col = (title, rows, stageId, fuKind) => (
     <div className="col" key={title} style={{ opacity: moving ? .7 : 1 }}
-      onDragOver={(ev) => { if (stageId) { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; } }}
-      onDrop={(ev) => { if (!stageId) return; ev.preventDefault(); const id = ev.dataTransfer.getData("text/plain"); if (id) dropTo(id, stageId); }}>
+      onDragOver={(ev) => { if (stageId || fuKind) { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; } }}
+      onDrop={(ev) => { if (!stageId && !fuKind) return; ev.preventDefault(); const id = ev.dataTransfer.getData("text/plain"); if (!id) return; if (fuKind) dropToFollowup(id, fuKind); else dropFromFollowup(id, stageId); }}>
       <h3>{title}<span>{rows.length}</span></h3>
-      {rows.map((l) => <LeadCard key={l.ghl_id} l={l} eng={engOf(l)} fu={fuOf(l)} seq={seq} onOpen={() => setOpen(l)} draggable={!!stageId} />)}
+      {rows.map((l) => <LeadCard key={l.ghl_id} l={l} eng={engOf(l)} fu={fuOf(l)} seq={seq} onOpen={() => setOpen(l)} draggable={!!stageId || !!fuKind} />)}
     </div>
   );
   const inSeq = (l, k) => fuOf(l) && (k === "checkin" ? fuOf(l).status === "checkin" : fuOf(l).status === "active" && fuOf(l).kind === k);
   const allCols = [
     ...shownStages.map((st) => ({ key: st.ghl_id, title: st.name, rows: inGhl.filter((l) => l.stage_id === st.ghl_id && !fuOf(l)), stageId: st.ghl_id })),
-    { key: "__ghost1", title: "Ghost · after Call 1", rows: inGhl.filter((l) => inSeq(l, "call1")) },
-    { key: "__ghost2", title: "Ghost · after Call 2", rows: inGhl.filter((l) => inSeq(l, "call2")) },
-    { key: "__checkin", title: "90-day check-in", rows: inGhl.filter((l) => inSeq(l, "checkin")) },
+    { key: "__ghost1", title: "Ghost · after Call 1", rows: inGhl.filter((l) => inSeq(l, "call1")), fuKind: "call1" },
+    { key: "__ghost2", title: "Ghost · after Call 2", rows: inGhl.filter((l) => inSeq(l, "call2")), fuKind: "call2" },
+    { key: "__checkin", title: "90-day check-in", rows: inGhl.filter((l) => inSeq(l, "checkin")), fuKind: "checkin" },
     { key: "__invited", title: "Invited", rows: leads.filter((l) => engOf(l) && SENT.includes(engOf(l).stage)) },
     { key: "__engaged", title: "Engaged", rows: leads.filter((l) => engOf(l) && ENGAGED.includes(engOf(l).stage)) },
   ];
@@ -619,7 +634,7 @@ function Leads() {
         {colNames.map(([n, c], i) => <button key={n} className={i === activeCol ? "on" : ""} onClick={() => goCol(i)}>{n} · {c}</button>)}
       </div>
       <div className="board" ref={boardRef} onScroll={onBoardScroll}>
-        {cols.map((c) => col(c.title, c.rows, c.stageId))}
+        {cols.map((c) => col(c.title, c.rows, c.stageId, c.fuKind))}
       </div>
       {open && <LeadDrawer lead={open} engagement={engByOpp[open.ghl_id]} onClose={() => setOpen(null)} reload={load} fu={fuOf(open)} seq={seq}
         stages={shownStages} onMove={(stageId) => { const id = open.ghl_id; setOpen(null); dropTo(id, stageId); }}
