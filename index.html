@@ -222,7 +222,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "2.18";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.0";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -519,23 +519,40 @@ function Leads() {
   const boardRef = useRef(null);
   const [activeCol, setActiveCol] = useState(0);
   const [layout, setLayout] = useState(null);   // { order: [keys], hidden: [keys] } from Settings
-  useEffect(() => { supabase.from("app_settings").select("value").eq("key", "leads_board").maybeSingle().then(({ data }) => setLayout(data?.value ?? null)); }, []);
+  const [seq, setSeq] = useState(null);         // follow-up sequences from Settings
+  const [fus, setFus] = useState([]);           // open follow-ups
+  const loc = useLocation();
+  useEffect(() => {
+    supabase.from("app_settings").select("key, value").in("key", ["leads_board", "followups"]).then(({ data }) => {
+      for (const r of data ?? []) { if (r.key === "leads_board") setLayout(r.value ?? null); if (r.key === "followups") setSeq(r.value ?? null); }
+    });
+  }, []);
 
   const load = useCallback(async () => {
-    const [s, l, e, sy] = await Promise.all([
+    const [s, l, e, sy, fu] = await Promise.all([
       supabase.from("pipeline_stages").select("*").order("position"),
       supabase.from("leads_board").select("*").order("ghl_updated_at", { ascending: false }),
       supabase.from("engagements").select("id, opportunity_id, stage").not("opportunity_id", "is", null),
       supabase.from("sync_log").select("received_at, ok, kind").eq("ok", true).order("id", { ascending: false }).limit(1).maybeSingle(),
+      supabase.from("followups").select("*").in("status", ["active", "checkin"]),
     ]);
     setStages(s.data ?? []);
     setLeads(l.data ?? []);
+    setFus(fu.data ?? []);
     setEngByOpp(Object.fromEntries((e.data ?? []).map((x) => [x.opportunity_id, x])));
     setLastSync(sy.data);
   }, []);
 
   useEffect(() => { load(); }, [load]);
   const [run, moving] = useAction();
+  useEffect(() => {
+    const id = new URLSearchParams(loc.search).get("open");
+    if (id && leads.length) { const l = leads.find((x) => x.ghl_id === id); if (l) setOpen(l); }
+  }, [loc.search, leads]);
+  // keep the open drawer in step with fresh data
+  useEffect(() => { if (open) { const l = leads.find((x) => x.ghl_id === open.ghl_id); if (l && l !== open) setOpen(l); } }, [leads]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const fuByOpp = Object.fromEntries(fus.map((f) => [f.opportunity_id, f]));
+  const fuOf = (l) => fuByOpp[l.ghl_id];
 
   if (stages.length === 0) return (
     <>
@@ -564,20 +581,25 @@ function Leads() {
     else moveTo(id, stageId);
   };
   const lostWithReason = async (reason) => {
-    const { id, stageId } = pendingLost; setPendingLost(null);
+    const { id, stageId, after } = pendingLost; setPendingLost(null);
     const ok = await moveTo(id, stageId);
     if (ok && reason) await run(() => rpc("set_lost_reason", { p_opportunity_id: id, p_reason: reason }).then(load));
+    if (ok && after) await after();
   };
   const col = (title, rows, stageId) => (
     <div className="col" key={title} style={{ opacity: moving ? .7 : 1 }}
       onDragOver={(ev) => { if (stageId) { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; } }}
       onDrop={(ev) => { if (!stageId) return; ev.preventDefault(); const id = ev.dataTransfer.getData("text/plain"); if (id) dropTo(id, stageId); }}>
       <h3>{title}<span>{rows.length}</span></h3>
-      {rows.map((l) => <LeadCard key={l.ghl_id} l={l} eng={engOf(l)} onOpen={() => setOpen(l)} draggable={!!stageId} />)}
+      {rows.map((l) => <LeadCard key={l.ghl_id} l={l} eng={engOf(l)} fu={fuOf(l)} seq={seq} onOpen={() => setOpen(l)} draggable={!!stageId} />)}
     </div>
   );
+  const inSeq = (l, k) => fuOf(l) && (k === "checkin" ? fuOf(l).status === "checkin" : fuOf(l).status === "active" && fuOf(l).kind === k);
   const allCols = [
-    ...shownStages.map((st) => ({ key: st.ghl_id, title: st.name, rows: inGhl.filter((l) => l.stage_id === st.ghl_id), stageId: st.ghl_id })),
+    ...shownStages.map((st) => ({ key: st.ghl_id, title: st.name, rows: inGhl.filter((l) => l.stage_id === st.ghl_id && !fuOf(l)), stageId: st.ghl_id })),
+    { key: "__ghost1", title: "Ghost · after Call 1", rows: inGhl.filter((l) => inSeq(l, "call1")) },
+    { key: "__ghost2", title: "Ghost · after Call 2", rows: inGhl.filter((l) => inSeq(l, "call2")) },
+    { key: "__checkin", title: "90-day check-in", rows: inGhl.filter((l) => inSeq(l, "checkin")) },
     { key: "__invited", title: "Invited", rows: leads.filter((l) => engOf(l) && SENT.includes(engOf(l).stage)) },
     { key: "__engaged", title: "Engaged", rows: leads.filter((l) => engOf(l) && ENGAGED.includes(engOf(l).stage)) },
   ];
@@ -599,14 +621,15 @@ function Leads() {
       <div className="board" ref={boardRef} onScroll={onBoardScroll}>
         {cols.map((c) => col(c.title, c.rows, c.stageId))}
       </div>
-      {open && <LeadDrawer lead={open} engagement={engByOpp[open.ghl_id]} onClose={() => setOpen(null)} reload={load}
-        stages={shownStages} onMove={(stageId) => { const id = open.ghl_id; setOpen(null); dropTo(id, stageId); }} />}
+      {open && <LeadDrawer lead={open} engagement={engByOpp[open.ghl_id]} onClose={() => setOpen(null)} reload={load} fu={fuOf(open)} seq={seq}
+        stages={shownStages} onMove={(stageId) => { const id = open.ghl_id; setOpen(null); dropTo(id, stageId); }}
+        onLost={(after) => { const lost = stages.find((st) => isLostStage(st)); setOpen(null); if (lost) { setPendingLost({ id: open.ghl_id, stageId: lost.ghl_id, after }); } else after?.(); }} />}
       {pendingLost && <LostReasonDialog onPick={lostWithReason} onCancel={() => setPendingLost(null)} />}
     </>
   );
 }
 
-const LOST_REASONS = ["No reply", "Not selling now", "No-show", "Price", "Chose another firm", "Not a fit"];
+const LOST_REASONS = ["No reply", "Not selling now", "No-show", "Price", "Chose another firm", "Already has another broker", "Not a fit"];
 
 /** Asked once when a lead is dragged to Lost / Not Now. The reason feeds the "Why lost" column on Reports. */
 function LostReasonDialog({ onPick, onCancel }) {
@@ -710,6 +733,260 @@ function NotesLog({ opportunityId, engagementId, title = "My notes" }) {
 }
 
 /** Valuation Builder PDFs attached to a lead; they follow the lead into its engagement. */
+// ===================== Follow-ups (ghost sequences + 90-day check-in) =====================
+const FU_KIND_LABEL = { call1: "after Call 1", call2: "after Call 2", checkin: "90-day check-in" };
+const digitsOf = (p) => String(p ?? "").replace(/[^0-9]/g, "");
+const addWorkingDays = (d, n) => { const x = new Date(d); let k = 0; while (k < n) { x.setDate(x.getDate() + 1); if (x.getDay() !== 0 && x.getDay() !== 6) k++; } return x; };
+const slotText = (d, h) => `${d.toLocaleDateString("en-GB", { weekday: "short" })} ${h}:00`;
+/** Fill {first} {company} {slot1} {slot2} {concern} {point} {booking} in a template. */
+function fuFill(text, lead, extra = {}, seq) {
+  const first = lead.first_name || lead.name.split("|")[0].trim().split(" ")[0];
+  const company = lead.company || lead.name.split("|")[0].trim();
+  const d1 = addWorkingDays(new Date(), 1), d2 = addWorkingDays(new Date(), 2);
+  const vals = { first, company, slot1: slotText(d1, 11), slot2: slotText(d2, 16), booking: seq?.booking || "", concern: "[their concern]", point: "[one useful point]", ...extra };
+  return String(text ?? "").replace(/\{(\w+)\}/g, (m, k) => (vals[k] ?? m));
+}
+const fuDue = (f) => { const t = new Date(); t.setHours(0, 0, 0, 0); const d = new Date(f.next_due + "T00:00:00"); return Math.round((d - t) / 86400000); };
+const fuDueLabel = (f) => { const n = fuDue(f); return n < 0 ? `${-n}d overdue` : n === 0 ? "due today" : n === 1 ? "tomorrow" : `in ${n}d`; };
+const isNoShow = (l) => /noshow|no_show/i.test(l.call_status ?? "") && l.call_at && new Date(l.call_at) < new Date();
+
+/** The chip on a lead card. */
+function FollowupChip({ f, seq }) {
+  if (!f) return null;
+  const n = fuDue(f);
+  const kind = n < 0 ? "danger" : n === 0 ? "warn" : "";
+  if (f.status === "checkin") return <Chip kind={kind} title="90-day check-in">Check-in {fuDueLabel(f)}</Chip>;
+  const st = seq?.[f.kind]?.steps?.[f.step - 1];
+  return <Chip kind={kind} title={st?.title}>Day {st?.day ?? "?"} · {st?.channel?.replace("+", " + ") ?? "touch"} · {fuDueLabel(f)}</Chip>;
+}
+
+/** Everything about one lead's follow-up: start it, work through the touches, log outcomes. */
+function LeadFollowup({ lead, fu, seq, reload, onConvert, onLost }) {
+  const [run, busy] = useAction();
+  const [extra, setExtra] = useState({});       // concern / point typed for this touch
+  const [msg, setMsg] = useState(null);         // edited message text
+  const [checkBack, setCheckBack] = useState("");
+  const [reason, setReason] = useState("");
+  const [nextStep, setNextStep] = useState(lead.next_step_at ?? "");
+  const [touches, setTouches] = useState([]);
+  useEffect(() => { setMsg(null); setExtra({}); }, [fu?.id, fu?.step]);
+  useEffect(() => { supabase.from("followup_touches").select("*").eq("opportunity_id", lead.ghl_id).order("done_at", { ascending: false }).limit(8).then(({ data }) => setTouches(data ?? [])); }, [lead.ghl_id, fu?.last_touch_on, fu?.status]);
+
+  const ghlNote = async (body) => { try { await supabase.functions.invoke("ghl-sync", { body: { action: "note", opportunity_id: lead.ghl_id, body } }); } catch (e) { /* best effort */ } };
+  const start = (kind) => run(async () => { await rpc("followup_start", { p_opportunity: lead.ghl_id, p_kind: kind }); await ghlNote(`Solonos: follow-up started (${FU_KIND_LABEL[kind]})`); await reload(); }, "Follow-up started");
+  const log = (channel, outcome, note, back) => run(async () => {
+    const f = await rpc("followup_log", { p_followup: fu.id, p_channel: channel, p_outcome: outcome, p_note: note || null, p_check_back: back || null });
+    await ghlNote(`Solonos: ${channel} · ${outcome.replace("_", " ")}${note ? " · " + note : ""}${f?.next_due ? " · next " + f.next_due : ""}`);
+    await reload();
+  }, outcome === "no_reply" ? "Logged. Next touch scheduled." : outcome === "replied" ? "Logged. Follow-up closed." : "Logged.");
+  const saveNextStep = (v) => run(async () => { const { error } = await supabase.from("opportunities").update({ next_step_at: v || null }).eq("ghl_id", lead.ghl_id); if (error) throw new Error(error.message); await reload(); }, v ? "Next step date saved" : "Next step date cleared");
+
+  const noShow = isNoShow(lead) && !fu;
+  const silence = (() => {
+    if (!lead.next_step_at || fu) return false;
+    const limit = addWorkingDays(new Date(lead.next_step_at + "T00:00:00"), 3);
+    const lastNote = lead.last_note_at ? new Date(lead.last_note_at) : null;
+    return new Date() > limit && (!lastNote || lastNote < new Date(lead.next_step_at + "T00:00:00"));
+  })();
+  const kindGuess = /showed|offer/i.test(lead.stage_name ?? "") ? "call2" : "call1";
+  const wa = (text) => `https://wa.me/${digitsOf(lead.phone)}?text=${encodeURIComponent(text)}`;
+  const sendMail = (subject, body) => run(async () => {
+    if (!lead.email) throw new Error("This lead has no email");
+    const html = `<div style="font-family:Inter,Arial,sans-serif;font-size:15px;line-height:1.55;color:#2A1E20;max-width:560px">${body.split("\n").map((l) => l ? `<p style="margin:0 0 12px">${l}</p>` : "").join("")}</div>`;
+    await callFn("send-email", { to: lead.email, subject, html });
+  }, "Email sent");
+
+  if (!seq) return <><h3>Follow-up</h3><p className="muted small">Run Part 31 in the SQL editor to switch on follow-ups.</p></>;
+
+  // ---------- not in a sequence
+  if (!fu) {
+    const ns = seq[kindGuess]?.noshow;
+    return (
+      <>
+        <h3>Follow-up</h3>
+        {noShow && (
+          <div className="card" style={{ padding: 12, background: "#F6E3DE", border: "1px solid #D9A79A", marginBottom: 10 }}>
+            <div style={{ fontWeight: 700, color: "var(--danger)", marginBottom: 6 }}>No-show on {callWhen(lead.call_at)}. WhatsApp now.</div>
+            <div className="row wrap">
+              {lead.phone && <a className="btn primary" href={wa(fuFill(ns?.text, lead, {}, seq))} target="_blank" rel="noreferrer">Open WhatsApp</a>}
+              <button className="btn" disabled={busy} onClick={() => start(kindGuess)}>Start sequence ({FU_KIND_LABEL[kindGuess]})</button>
+            </div>
+          </div>
+        )}
+        {silence && (
+          <div className="card" style={{ padding: 12, background: "var(--sunken)", marginBottom: 10 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Three working days of silence since the agreed next step ({day(lead.next_step_at)}). Start the ghost sequence?</div>
+            <div className="row"><button className="btn primary" disabled={busy} onClick={() => start("call1")}>After Call 1</button><button className="btn primary" disabled={busy} onClick={() => start("call2")}>After Call 2</button><button className="btn" disabled={busy} onClick={() => saveNextStep("")}>Not a ghost, clear the date</button></div>
+          </div>
+        )}
+        <div className="row wrap" style={{ marginBottom: 8 }}>
+          <label className="small row" style={{ gap: 6 }}>Next step agreed for <input type="date" value={nextStep} onChange={(x) => setNextStep(x.target.value)} onBlur={() => nextStep !== (lead.next_step_at ?? "") && saveNextStep(nextStep)} /></label>
+        </div>
+        <div className="row wrap" style={{ marginBottom: 16 }}>
+          <button className="btn" disabled={busy} onClick={() => start("call1")}>Start follow-up: after Call 1</button>
+          <button className="btn" disabled={busy} onClick={() => start("call2")}>Start follow-up: after Call 2</button>
+          <button className="btn" disabled={busy} onClick={() => start("checkin")}>Add to 90-day list</button>
+        </div>
+        {touches.length > 0 && <TouchHistory touches={touches} />}
+      </>
+    );
+  }
+
+  // ---------- on the 90-day list
+  if (fu.status === "checkin") {
+    const reasons = seq.checkin_reasons ?? [];
+    return (
+      <>
+        <h3>90-day check-in</h3>
+        <div className="card" style={{ padding: 12, background: "var(--sunken)", marginBottom: 10 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Next check-in {day(fu.next_due)} ({fuDueLabel(fu)})</div>
+          <p className="muted small" style={{ margin: "0 0 8px" }}>Only with a reason. Pick one, or type your own.</p>
+          <div className="row wrap" style={{ marginBottom: 8 }}>
+            {reasons.map((r) => <button key={r} className={`btn${reason === r ? " primary" : ""}`} onClick={() => setReason(r)}>{r}</button>)}
+          </div>
+          <input value={reason} onChange={(x) => setReason(x.target.value)} placeholder="Reason for this check-in" style={{ width: "100%", marginBottom: 8 }} />
+          <div className="row wrap">
+            {lead.phone && <a className="btn" href={wa(fuFill(`Hi {first}, ${reason || "{point}"}. Has anything changed on your side?`, lead, {}, seq))} target="_blank" rel="noreferrer">WhatsApp</a>}
+            {lead.phone && <a className="btn" href={`tel:${lead.phone}`}>Call</a>}
+            <button className="btn primary" disabled={busy || !reason.trim()} onClick={() => log("checkin", "checkin", reason)}>Log check-in (next in {seq.checkin_days ?? 90} days)</button>
+          </div>
+          <div className="row wrap" style={{ marginTop: 10 }}>
+            <button className="btn" disabled={busy} onClick={() => log("checkin", "replied", reason)}>They replied</button>
+            <label className="small row" style={{ gap: 6 }}>Check back on <input type="date" value={checkBack} onChange={(x) => setCheckBack(x.target.value)} /><button className="btn" disabled={busy || !checkBack} onClick={() => log("checkin", "not_now", reason, checkBack)}>Set</button></label>
+            <button className="btn" disabled={busy} onClick={() => onLost(() => log("checkin", "lost", reason))}>Said no</button>
+            <button className="linklike small" style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer" }} disabled={busy} onClick={() => run(() => rpc("followup_cancel", { p_followup: fu.id }).then(reload), "Removed from the list")}>Remove from list</button>
+          </div>
+        </div>
+        {touches.length > 0 && <TouchHistory touches={touches} />}
+      </>
+    );
+  }
+
+  // ---------- active sequence
+  const s = seq[fu.kind], step = s?.steps?.[fu.step - 1] ?? {}, total = s?.steps?.length ?? 0;
+  const text = msg ?? fuFill(step.text, lead, extra, seq);
+  const subject = fuFill(step.subject ?? "", lead, extra, seq);
+  const chans = String(step.channel ?? "").split("+");
+  const needs = [...String(step.text ?? "").matchAll(/\{(concern|point)\}/g)].map((m) => m[1]);
+  const n = fuDue(fu);
+  return (
+    <>
+      <h3>Follow-up · {FU_KIND_LABEL[fu.kind]} <span className="muted small" style={{ fontWeight: 400 }}>goal: {s?.goal}</span></h3>
+      <div className="card" style={{ padding: 12, background: n < 0 ? "#F6E3DE" : "var(--sunken)", marginBottom: 10 }}>
+        <div className="row between" style={{ marginBottom: 6 }}>
+          <div style={{ fontWeight: 700 }}>Touch {fu.step} of {total} · Day {step.day} · {step.title}</div>
+          <span className={`chip ${n < 0 ? "danger" : n === 0 ? "warn" : ""}`}>{fuDueLabel(fu)}</span>
+        </div>
+        {needs.map((k) => <input key={k} value={extra[k] ?? ""} onChange={(x) => { setExtra({ ...extra, [k]: x.target.value }); setMsg(null); }} placeholder={k === "concern" ? "Their concern, in their words" : "One useful, specific point from their case"} style={{ width: "100%", marginBottom: 6 }} />)}
+        {step.subject && <div className="small" style={{ marginBottom: 4 }}><b>Subject:</b> {subject}</div>}
+        <textarea rows={Math.min(8, Math.max(3, text.split("\n").length + 1))} value={text} onChange={(x) => setMsg(x.target.value)} style={{ width: "100%", marginBottom: 8 }} />
+        <div className="row wrap" style={{ marginBottom: 10 }}>
+          {chans.includes("whatsapp") && lead.phone && <a className="btn primary" href={wa(text)} target="_blank" rel="noreferrer">Open WhatsApp</a>}
+          {(chans.includes("call") || chans.includes("voicemail")) && lead.phone && <a className="btn primary" href={`tel:${lead.phone}`}>Call {lead.phone}</a>}
+          {chans.includes("email") && <button className="btn primary" disabled={busy || !lead.email} onClick={() => sendMail(subject, text)}>Send email from info@</button>}
+          {chans.includes("letter") && <button className="btn primary" disabled={busy} onClick={onConvert}>Convert and send the engagement letter</button>}
+          {!lead.phone && (chans.includes("whatsapp") || chans.includes("call")) && <span className="muted small">No phone number on this lead</span>}
+        </div>
+        <div className="muted small" style={{ marginBottom: 6 }}>Then, what happened?</div>
+        <div className="row wrap">
+          <button className="btn" disabled={busy || fu.last_touch_on === new Date().toISOString().slice(0, 10)} title={fu.last_touch_on === new Date().toISOString().slice(0, 10) ? "One touch a day: already logged today" : ""} onClick={() => log(step.channel, "no_reply", extra.concern || extra.point || "")}>No reply, schedule next</button>
+          <button className="btn" disabled={busy} onClick={() => log(step.channel, "replied")}>They replied</button>
+          <label className="small row" style={{ gap: 6 }}>Not now, check back <input type="date" value={checkBack} onChange={(x) => setCheckBack(x.target.value)} /><button className="btn" disabled={busy || !checkBack} onClick={() => log(step.channel, "not_now", "", checkBack)}>Set</button></label>
+          <button className="btn" disabled={busy} onClick={() => onLost(() => log(step.channel, "lost"))}>Said no</button>
+        </div>
+        <div style={{ marginTop: 8 }}><button className="linklike small" style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", padding: 0 }} disabled={busy} onClick={() => run(() => rpc("followup_cancel", { p_followup: fu.id }).then(reload), "Follow-up stopped")}>Stop this follow-up</button></div>
+      </div>
+      {touches.length > 0 && <TouchHistory touches={touches} />}
+    </>
+  );
+}
+
+function TouchHistory({ touches }) {
+  return (
+    <div className="small" style={{ marginBottom: 14 }}>
+      <div className="muted" style={{ marginBottom: 4 }}>Touches</div>
+      {touches.map((t) => <div key={t.id} className="row between" style={{ padding: "3px 0", borderBottom: "1px solid var(--border-sub)" }}><span>{day(t.done_at)} · {String(t.channel ?? "").replace("+", " + ")} · {t.outcome.replace("_", " ")}{t.note ? ` · ${t.note}` : ""}</span><span className="muted">{t.next_due ? `next ${day(t.next_due)}` : ""}</span></div>)}
+    </div>
+  );
+}
+
+/** Dashboard: everything due today, overdue first. */
+function TodayBox() {
+  const [rows, setRows] = useState(null);
+  const [seq, setSeq] = useState(null);
+  useEffect(() => {
+    (async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const [{ data: r }, { data: s }] = await Promise.all([
+        supabase.from("followup_board").select("*").lte("next_due", today).order("next_due"),
+        supabase.from("app_settings").select("value").eq("key", "followups").maybeSingle(),
+      ]);
+      setRows(r ?? []); setSeq(s?.value ?? null);
+    })();
+  }, []);
+  return (
+    <Card title="Today" right={<NavLink to="/app/leads" className="btn">Open leads</NavLink>} style={{ marginBottom: 18 }}>
+      {!rows ? <span className="muted small">Loading…</span> : rows.length === 0 ? <span className="muted">No follow-ups due today.</span> : (
+        <div className="stack" style={{ gap: 6 }}>
+          {rows.map((f) => {
+            const st = f.status === "checkin" ? null : seq?.[f.kind]?.steps?.[f.step - 1];
+            return (
+              <NavLink key={f.followup_id} to={`/app/leads?open=${encodeURIComponent(f.opportunity_id)}`} className="row between" style={{ padding: "8px 10px", border: "1px solid var(--border-sub)", borderRadius: 8, background: "var(--surface)", textDecoration: "none", color: "inherit" }}>
+                <span><b>{f.name.split("|")[0].trim()}</b> <span className="muted small">{f.status === "checkin" ? "90-day check-in" : `${FU_KIND_LABEL[f.kind]} · Day ${st?.day ?? "?"} · ${st?.title ?? ""}`}</span></span>
+                <FollowupChip f={f} seq={seq} />
+              </NavLink>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** Settings: edit the sequences. */
+function FollowupSettings() {
+  const [run, busy] = useAction();
+  const [seq, setSeq] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => { supabase.from("app_settings").select("value").eq("key", "followups").maybeSingle().then(({ data }) => setSeq(data?.value ?? null)); }, []);
+  const upd = (fn) => { const c = JSON.parse(JSON.stringify(seq)); fn(c); setSeq(c); setDirty(true); };
+  const save = () => run(async () => {
+    const { error } = await supabase.from("app_settings").upsert({ key: "followups", value: seq, updated_at: new Date().toISOString() });
+    if (error) throw new Error(error.message); setDirty(false);
+  }, "Follow-up sequences saved");
+  if (!seq) return <Card title="Follow-up sequences"><span className="muted small">Run Part 31 in the SQL editor first.</span></Card>;
+  const inp = { width: "100%" };
+  return (
+    <Card title="Follow-up sequences" right={<span className="muted small">Placeholders: {"{first} {company} {slot1} {slot2} {concern} {point} {booking}"}</span>}>
+      <div className="grid2" style={{ marginBottom: 12 }}>
+        <Field label="Check-in list: days between check-ins"><input type="number" value={seq.checkin_days ?? 90} onChange={(x) => upd((c) => { c.checkin_days = Number(x.target.value) || 90; })} /></Field>
+        <Field label="Booking link for {booking}"><input value={seq.booking ?? ""} onChange={(x) => upd((c) => { c.booking = x.target.value; })} placeholder="https://…" /></Field>
+      </div>
+      {["call1", "call2"].map((k) => (
+        <div key={k} style={{ marginBottom: 18 }}>
+          <h3 style={{ marginBottom: 6 }}>Ghost {FU_KIND_LABEL[k]} <span className="muted small" style={{ fontWeight: 400 }}>goal: {seq[k]?.goal}</span></h3>
+          <Field label="No-show WhatsApp (within 10 minutes)"><textarea rows="2" style={inp} value={seq[k]?.noshow?.text ?? ""} onChange={(x) => upd((c) => { c[k].noshow = { ...(c[k].noshow ?? { channel: "whatsapp" }), text: x.target.value }; })} /></Field>
+          {(seq[k]?.steps ?? []).map((st, i) => (
+            <div key={i} className="card" style={{ padding: 10, background: "var(--sunken)", marginTop: 8 }}>
+              <div className="row wrap" style={{ marginBottom: 6 }}>
+                <label className="small row" style={{ gap: 6 }}>Day <input type="number" style={{ width: 64 }} value={st.day} onChange={(x) => upd((c) => { c[k].steps[i].day = Number(x.target.value) || 1; })} /></label>
+                <select value={st.channel} onChange={(x) => upd((c) => { c[k].steps[i].channel = x.target.value; })}>
+                  {["whatsapp", "call+whatsapp", "call+voicemail", "email", "letter"].map((o) => <option key={o} value={o}>{o.replace("+", " + ")}</option>)}
+                </select>
+                <input style={{ flex: 1, minWidth: 180 }} value={st.title} onChange={(x) => upd((c) => { c[k].steps[i].title = x.target.value; })} placeholder="What this touch is" />
+              </div>
+              {["email", "letter"].includes(st.channel) && <input style={{ ...inp, marginBottom: 6 }} value={st.subject ?? ""} onChange={(x) => upd((c) => { c[k].steps[i].subject = x.target.value; })} placeholder="Email subject" />}
+              <textarea rows="3" style={inp} value={st.text ?? ""} onChange={(x) => upd((c) => { c[k].steps[i].text = x.target.value; })} />
+            </div>
+          ))}
+        </div>
+      ))}
+      <div className="row"><button className="btn primary" disabled={busy || !dirty} onClick={save}>Save sequences</button>{dirty && <span className="muted small">Unsaved changes</span>}</div>
+    </Card>
+  );
+}
+
+
 /** NDA made on the lead, before any engagement. Generate it (and optionally email it), then upload the signed copy.
  *  Both follow the lead into the engagement on conversion, where the signed copy marks the NDA signed. */
 function LeadNda({ lead }) {
@@ -919,7 +1196,7 @@ function LeadBuilders({ lead, reload }) {
   );
 }
 
-function LeadCard({ l, eng, onOpen, draggable }) {
+function LeadCard({ l, eng, fu, seq, onOpen, draggable }) {
   return (
     <div className="lead" onClick={onOpen} draggable={draggable} onDragStart={(ev) => { ev.dataTransfer.setData("text/plain", l.ghl_id); ev.dataTransfer.effectAllowed = "move"; }}>
       <div className="name">{l.name}</div>
@@ -933,7 +1210,9 @@ function LeadCard({ l, eng, onOpen, draggable }) {
         {l.recordings > 0 && <Chip>Fathom ×{l.recordings}</Chip>}
         {l.builders > 0 && <Chip kind="brand">Builder sent</Chip>}
         {l.lost_reason && <Chip kind="danger">{l.lost_reason}</Chip>}
-        {l.call_at && <Chip kind={new Date(l.call_at) >= new Date() ? "ok" : ""} title={l.call_title || "Call"}>{callWhen(l.call_at)}</Chip>}
+        {l.call_at && !isNoShow(l) && <Chip kind={new Date(l.call_at) >= new Date() ? "ok" : ""} title={l.call_title || "Call"}>{callWhen(l.call_at)}</Chip>}
+        {isNoShow(l) && !fu && <Chip kind="danger" title={callWhen(l.call_at)}>No-show</Chip>}
+        <FollowupChip f={fu} seq={seq} />
         {eng && <Chip kind={eng.stage === "declined" ? "danger" : "accent"}>{stageLabel(eng.stage)}</Chip>}
       </div>
     </div>
@@ -1046,7 +1325,7 @@ function Head({ lastSync, count, reload }) {
   );
 }
 
-function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove }) {
+function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove, fu, seq, onLost }) {
   const nav = useNavigate();
   const [run, busy] = useAction();
   const [recs, setRecs] = useState([]);
@@ -1107,6 +1386,7 @@ function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove }) {
       </dl>
 
       <Intake custom={lead.custom} />
+      {!engagement && <LeadFollowup lead={lead} fu={fu} seq={seq} reload={reload} onConvert={() => setConvert(true)} onLost={onLost} />}
       <LeadNda lead={lead} />
       <LeadBuilders lead={lead} reload={reload} />
 
@@ -1946,6 +2226,8 @@ function Settings() {
     <>
       <div className="pagehead"><div><h1>Settings</h1><p>How Solonos looks and works for you.</p></div></div>
       <BoardSettings />
+      <div style={{ height: 18 }} />
+      <FollowupSettings />
     </>
   );
 }
@@ -1960,7 +2242,7 @@ function BoardSettings() {
         supabase.from("pipeline_stages").select("ghl_id,name,position").order("position"),
         supabase.from("app_settings").select("value").eq("key", "leads_board").maybeSingle(),
       ]);
-      const base = [...(st ?? []).map((x) => ({ key: x.ghl_id, title: x.name })), { key: "__invited", title: "Invited" }, { key: "__engaged", title: "Engaged" }];
+      const base = [...(st ?? []).map((x) => ({ key: x.ghl_id, title: x.name })), { key: "__ghost1", title: "Ghost · after Call 1" }, { key: "__ghost2", title: "Ghost · after Call 2" }, { key: "__checkin", title: "90-day check-in" }, { key: "__invited", title: "Invited" }, { key: "__engaged", title: "Engaged" }];
       const layout = saved?.value ?? null, hidden = new Set(layout?.hidden ?? []);
       const ordered = layout ? applyBoardLayout(base, { order: layout.order }) : base;
       setRows(ordered.map((r) => ({ ...r, hidden: hidden.has(r.key) })));
@@ -2762,6 +3044,7 @@ function Dashboard() {
       </div>
       {err && <div className="note" style={{ color: "var(--danger)", marginBottom: 14 }}>{err}</div>}
       <Headline h={data?.headline} range={range} />
+      <TodayBox />
       <Card title="Funnel" right={<NavLink to="/app/reports" className="btn">Open reports</NavLink>}>
         {chain.length === 0 ? <span className="muted">No leads in this period.</span> : (
           <div className="row wrap" style={{ gap: 6 }}>
