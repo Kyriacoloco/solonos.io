@@ -178,12 +178,13 @@ function NsP7({d:t,m:e}){var h=o.default.createElement,f1=nsNum(t.fee)||12500,v=
  var sh=(0,o.useState)(0),step=sh[0],setStep=sh[1],show=step>0;
  var op=(0,o.useState)({}),open=op[0],setOpen=op[1];
  var items=[
-  ["Set one clear asking price","Know exactly what price to ask for, and why."],
+  ["Set one clear asking price","Start buyer talks with one number you can explain, not a wide range."],
   ["Find and fix what could lower your selling price","Stop small, hidden problems from adding up to a big price cut."],
-  ["Get an independent, signed valuation","Back up your asking price with a signed valuation from Nomad."],
-  ["Get everything ready for the buyer","Have your financial records and answers ready when buyers ask."],
-  ["Find out what the offer is really worth","Know how much you\u2019ll actually get paid, not just what they offer."],
-  ["Help you negotiate the sale","Get help pushing back when buyers try to lower the price or change the deal."]];
+  ["Get an independent, signed valuation","Show buyers that your asking price isn\u2019t just your own opinion."],
+  ["Get everything ready for the buyer","Have the records and answers buyers need, without a last-minute scramble."],
+  ["Find out what the offer is really worth","Avoid agreeing to terms that could leave you with less money."],
+  ["Help you negotiate the sale","Know when to push back and what to ask for instead."]];
+
 
  var item=function(i){var x=items[i],on=!!open[i];return h("div",{key:i,onClick:function(){var c={};for(var k in open)c[k]=open[k];c[i]=!on;setOpen(c)},style:{cursor:"pointer",minWidth:0}},
    h("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:8}},
@@ -194,8 +195,8 @@ function NsP7({d:t,m:e}){var h=o.default.createElement,f1=nsNum(t.fee)||12500,v=
    h("div",{style:{height:2,width:130,background:NS.gold,marginBottom:22}}),
    h(NsTitle,{size:34},"Sale & Negotiation Advisory"),
    h("div",{style:{marginTop:-6,marginBottom:14,maxWidth:900}},
-    h("div",{style:{fontSize:14.5,fontWeight:700,color:NS.goldLt,lineHeight:1.45}},"For owners who are ready to sell, are speaking with buyers, or have received an offer."),
-    h("div",{style:{fontSize:14.5,color:NS.mute,lineHeight:1.45,marginTop:2}},"We help you get your business ready to sell, know what price to ask for, and negotiate the best deal possible.")),
+    h("div",{style:{fontSize:14.5,fontWeight:700,color:NS.goldLt,lineHeight:1.45}},"For owners ready to sell, speaking with buyers, or considering an offer."),
+    h("div",{style:{fontSize:14.5,color:NS.mute,lineHeight:1.45,marginTop:2}},"When millions are at stake, small mistakes can get expensive.")),
    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0 28px",marginTop:10,alignItems:"start"}},[0,1,2].map(item)),
    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0 28px",marginTop:18,alignItems:"start"}},[3,4,5].map(item)),
    h("div",{onClick:function(){setStep((step+1)%4)},style:{marginTop:26,cursor:"pointer",alignSelf:"flex-start"}},
@@ -213,10 +214,11 @@ function NsP8({d:t,m:e}){var h=o.default.createElement,f2=nsNum(t.fee2)||5500,v=
  var sh=(0,o.useState)(0),step=sh[0],setStep=sh[1];
  var op=(0,o.useState)({}),open=op[0],setOpen=op[1];
  var items=[
-  ["Find out what your business is worth today","Know what your business could sell for today, and why."],
-  ["Find the problems that could lower your selling price","Discover hidden problems that could make buyers offer you less."],
-  ["Find out which problems are worth fixing first","Focus your time and money on the changes that matter most to buyers."],
-  ["Build your 1\u20133 year plan to get ready to sell","Know what to work on now, over the next few years, and before you sell."]];
+  ["Find out what your business is worth today","Get a written estimate you can use to plan your next move."],
+  ["Find the problems that could lower your selling price","Don\u2019t wait for a buyer to point out problems you\u2019ve missed."],
+  ["Find out which problems are worth fixing first","Spend your time and money on the changes that matter most."],
+  ["Build your 1\u20133 year plan to get ready to sell","Know what to tackle now, next year, and before buyers come."]];
+
 
  var item=function(i){var x=items[i],on=!!open[i];return h("div",{key:i,onClick:function(){var c={};for(var k in open)c[k]=open[k];c[i]=!on;setOpen(c)},style:{cursor:"pointer",minWidth:0}},
    h("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:8}},
@@ -227,8 +229,8 @@ function NsP8({d:t,m:e}){var h=o.default.createElement,f2=nsNum(t.fee2)||5500,v=
    h("div",{style:{height:2,width:130,background:NS.gold,marginBottom:22}}),
    h(NsTitle,{size:34},"Sale Readiness Plan"),
    h("div",{style:{marginTop:-6,marginBottom:14,maxWidth:900}},
-    h("div",{style:{fontSize:14.5,fontWeight:700,color:NS.goldLt,lineHeight:1.45}},"For owners thinking of selling in the next 1\u20133 years, or who simply want to know where they stand."),
-    h("div",{style:{fontSize:14.5,color:NS.mute,lineHeight:1.45,marginTop:2}},"Find out what your business is worth today and get a clear plan to make it more attractive to buyers before you\u2019re ready to sell.")),
+    h("div",{style:{fontSize:14.5,fontWeight:700,color:NS.goldLt,lineHeight:1.45}},"For owners planning to sell in the next 1\u20133 years, or who simply want to know where they stand."),
+    h("div",{style:{fontSize:14.5,color:NS.mute,lineHeight:1.45,marginTop:2}},"Start preparing early, so you\u2019re not rushing when it\u2019s time to sell.")),
    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 36px",marginTop:10,alignItems:"start",maxWidth:820}},[0,1].map(item)),
    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 36px",marginTop:18,alignItems:"start",maxWidth:820}},[2,3].map(item)),
    h("div",{onClick:function(){setStep((step+1)%4)},style:{marginTop:26,cursor:"pointer",alignSelf:"flex-start"}},
