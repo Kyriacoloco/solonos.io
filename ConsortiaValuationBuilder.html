@@ -148,18 +148,30 @@ function NsP5(){var h=o.default.createElement;
    :h("div",{style:{fontSize:34,fontWeight:800,color:"rgba(217,183,100,.25)",lineHeight:1}},"?"))))}
 
 /* 6 · Independent proof */
-function NsP6({d:t,m:e}){var h=o.default.createElement;return h(o.default.Fragment,null,
+function NsP6({d:t,m:e}){var h=o.default.createElement;
+ var op=(0,o.useState)({}),open=op[0],setOpen=op[1];
+ var items=[
+  ["A well-supported number","Three methods, not one: what similar companies sold for, what listed peers trade at, and the cash the business generates."],
+  ["A close look at the numbers","We check the figures behind the value and flag anything that could move it, before the buyer does."],
+  ["A qualified, independent signature","A valuer from a recognised body (ACA / ICAEW); without it the buyer dismisses the report and your number collapses."]];
+ var item=function(i){var x=items[i],on=!!open[i];return h("div",{key:i,onClick:function(){var c={};for(var k in open)c[k]=open[k];c[i]=!on;setOpen(c)},style:{cursor:"pointer",minWidth:0}},
+   h("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:8}},
+    h("div",{style:{width:34,height:34,borderRadius:17,background:on?NS.gold:"transparent",border:"2px solid "+NS.goldDk,color:on?NS.navy:NS.goldDk,fontWeight:800,fontSize:16,display:"grid",placeItems:"center",flex:"none"}},i+1),
+    on?h("div",{style:{fontSize:17,fontWeight:800,lineHeight:1.25,color:NS.navy}},x[0]):h("span",{className:"no-print",style:{fontSize:11,color:NS.grey}},"click to reveal")),
+   on?h("div",{style:{fontSize:13.5,lineHeight:1.5,color:NS.grey}},x[1]):null)};
+ return h(o.default.Fragment,null,
  h(NsKick,{dark:!0},"3 \xB7 Independent proof"),
  h(NsTitle,{light:!0},"When the buyer challenges your number"),
- h("div",{style:{fontSize:16,color:NS.grey,lineHeight:1.55,marginBottom:36}},"Buyer: \u201COf course you say it is worth ",yt(e.central),". It is your business.\u201D"),
- h("div",{style:{background:NS.navy,color:NS.white,borderRadius:14,padding:"36px 40px",textAlign:"center",maxWidth:860,margin:"0 auto",width:"100%",boxSizing:"border-box"}},
-  h("div",{style:{fontSize:24,fontWeight:800,marginBottom:14}},"Signed independent valuation"),
-  h("div",{style:{height:2,background:NS.gold,width:360,margin:"0 auto 28px"}}),
+ h("div",{style:{fontSize:16,color:NS.grey,lineHeight:1.55,marginBottom:22}},"Buyer: “Of course you say it is worth ",yt(e.central),". It is your business.”"),
+ h("div",{style:{background:NS.navy,color:NS.white,borderRadius:14,padding:"26px 40px",textAlign:"center",maxWidth:860,margin:"0 auto",width:"100%",boxSizing:"border-box"}},
+  h("div",{style:{fontSize:24,fontWeight:800,marginBottom:12}},"Signed independent valuation"),
+  h("div",{style:{height:2,background:NS.gold,width:360,margin:"0 auto 20px"}}),
   h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:24,fontSize:15,lineHeight:1.5}},
    h("div",{style:{color:NS.mute}},"Based on the complete business data"),
    h("div",{style:{fontWeight:800,color:NS.goldLt}},"Signed by an independent business valuer"),
    h("div",{style:{color:NS.mute}},"Buyer or adviser can contact the valuer"))),
- h("div",{style:{fontSize:18,fontWeight:800,textAlign:"center",marginTop:36}},"Owner: \u201CI did not choose the number. An independent valuer did.\u201D"))}
+ h("div",{style:{fontSize:22,fontWeight:800,color:NS.navy,marginTop:30,marginBottom:14,lineHeight:1.25}},"The three things your independent valuation should have"),
+ h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0 28px",alignItems:"start"}},[0,1,2].map(item)))}
 
 /* 7 · Sale & Negotiation Advisory */
 function NsP7({d:t,m:e}){var h=o.default.createElement,f1=nsNum(t.fee)||12500,v=(e&&e.central>0)?e.central:0,one=v/100;
@@ -186,9 +198,10 @@ function NsP7({d:t,m:e}){var h=o.default.createElement,f1=nsNum(t.fee)||12500,v=
     step===0?h("div",{style:{display:"inline-flex",alignItems:"center",gap:12}},h("div",{style:{fontSize:13,fontWeight:700,letterSpacing:".14em",textTransform:"uppercase",color:NS.gold,border:"1px solid "+NS.gold,borderRadius:999,padding:"8px 16px"}},"Investment"),h("span",{className:"no-print",style:{fontSize:11,color:NS.mute}},"click to reveal")):null,
     step>=1?h("div",null,
       h("div",{style:{display:"inline-flex",alignItems:"center",gap:12}},h("div",{style:{fontSize:40,fontWeight:800,color:NS.gold,lineHeight:1}},ce(f1)),h("span",{style:{fontSize:13,color:NS.mute}},"Investment for the full advisory")),
-      v>0?h("div",{style:{fontSize:15,lineHeight:1.5,color:NS.mute,marginTop:10}},"On a ",h("b",{style:{color:NS.white}},yt(v))," sale, just a 1% difference in the final price is ",h("b",{style:{color:NS.goldLt}},ce(one)),"."):h("div",{className:"no-print",style:{fontSize:13,color:NS.goldLt,marginTop:10}},"No valuation yet: enter revenue and EBITDA in the form and this line shows 1% of the client\u2019s value."),
       step===1?h("div",{className:"no-print",style:{fontSize:11,color:NS.mute,marginTop:8}},"click again"):null):null,
-    step>=2?h("div",{style:{marginTop:14,borderLeft:"3px solid "+NS.gold,paddingLeft:16}},h("div",{style:{fontSize:22,fontWeight:800,color:NS.white,lineHeight:1.3}},"Our average increase in the end price is ",h("span",{style:{color:NS.gold}},"27%"),"."),h("div",{style:{fontSize:17,fontWeight:700,color:NS.goldLt,marginTop:4}},"1% would be a complete disaster.")):null))}
+    step>=2?h("div",{style:{marginTop:10}},
+      v>0?h("div",{style:{fontSize:15,lineHeight:1.5,color:NS.mute,marginTop:0}},"On a ",h("b",{style:{color:NS.white}},yt(v))," sale, just a 1% difference in the final price is ",h("b",{style:{color:NS.goldLt}},ce(one)),"."):h("div",{className:"no-print",style:{fontSize:13,color:NS.goldLt,marginTop:0}},"No valuation yet: enter revenue and EBITDA in the form and this line shows 1% of the client\u2019s value."),
+      h("div",{style:{marginTop:14,borderLeft:"3px solid "+NS.gold,paddingLeft:16}},h("div",{style:{fontSize:22,fontWeight:800,color:NS.white,lineHeight:1.3}},"Our average increase in the end price is ",h("span",{style:{color:NS.gold}},"27%"),"."),h("div",{style:{fontSize:17,fontWeight:700,color:NS.goldLt,marginTop:4}},"1% would be a complete disaster."))):null))}
 
 
 /* 8 · Sale Readiness Plan */
@@ -214,9 +227,10 @@ function NsP8({d:t,m:e}){var h=o.default.createElement,f2=nsNum(t.fee2)||5500,v=
     step===0?h("div",{style:{display:"inline-flex",alignItems:"center",gap:12}},h("div",{style:{fontSize:13,fontWeight:700,letterSpacing:".14em",textTransform:"uppercase",color:NS.gold,border:"1px solid "+NS.gold,borderRadius:999,padding:"8px 16px"}},"Investment"),h("span",{className:"no-print",style:{fontSize:11,color:NS.mute}},"click to reveal")):null,
     step>=1?h("div",null,
       h("div",{style:{display:"inline-flex",alignItems:"center",gap:12}},h("div",{style:{fontSize:40,fontWeight:800,color:NS.gold,lineHeight:1}},ce(f2)),h("span",{style:{fontSize:13,color:NS.mute}},"Investment for the plan")),
-      v>0?h("div",{style:{fontSize:15,lineHeight:1.5,color:NS.mute,marginTop:10}},"On a ",h("b",{style:{color:NS.white}},yt(v))," sale, just a 1% difference in the final price is ",h("b",{style:{color:NS.goldLt}},ce(one)),"."):h("div",{className:"no-print",style:{fontSize:13,color:NS.goldLt,marginTop:10}},"No valuation yet: enter revenue and EBITDA in the form and this line shows 1% of the client\u2019s value."),
       step===1?h("div",{className:"no-print",style:{fontSize:11,color:NS.mute,marginTop:8}},"click again"):null):null,
-    step>=2?h("div",{style:{marginTop:14,borderLeft:"3px solid "+NS.gold,paddingLeft:16}},h("div",{style:{fontSize:22,fontWeight:800,color:NS.white,lineHeight:1.3}},"Our average increase in the end price is ",h("span",{style:{color:NS.gold}},"27%"),"."),h("div",{style:{fontSize:17,fontWeight:700,color:NS.goldLt,marginTop:4}},"1% would be a complete disaster.")):null))}
+    step>=2?h("div",{style:{marginTop:10}},
+      v>0?h("div",{style:{fontSize:15,lineHeight:1.5,color:NS.mute,marginTop:0}},"On a ",h("b",{style:{color:NS.white}},yt(v))," sale, just a 1% difference in the final price is ",h("b",{style:{color:NS.goldLt}},ce(one)),"."):h("div",{className:"no-print",style:{fontSize:13,color:NS.goldLt,marginTop:0}},"No valuation yet: enter revenue and EBITDA in the form and this line shows 1% of the client\u2019s value."),
+      h("div",{style:{marginTop:14,borderLeft:"3px solid "+NS.gold,paddingLeft:16}},h("div",{style:{fontSize:22,fontWeight:800,color:NS.white,lineHeight:1.3}},"Our average increase in the end price is ",h("span",{style:{color:NS.gold}},"27%"),"."),h("div",{style:{fontSize:17,fontWeight:700,color:NS.goldLt,marginTop:4}},"1% would be a complete disaster."))):null))}
 
 
 /* 9 · The two packages and the investment */
