@@ -1,5 +1,19 @@
 {
   "rewrites": [
-    { "source": "/((?!ConsortiaValuationBuilder\\.html$).*)", "destination": "/index.html" }
+    {
+      "source": "/((?!ConsortiaValuationBuilder\\.html$).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/ConsortiaValuationBuilder.html",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    }
   ]
 }
