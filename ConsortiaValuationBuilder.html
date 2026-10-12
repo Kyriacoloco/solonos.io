@@ -178,12 +178,13 @@ function NsP7({d:t,m:e}){var h=o.default.createElement,f1=nsNum(t.fee)||12500,v=
  var sh=(0,o.useState)(0),step=sh[0],setStep=sh[1],show=step>0;
  var op=(0,o.useState)({}),open=op[0],setOpen=op[1];
  var items=[
-  ["Set one clear asking price","We look at your business and set one clear price to aim for, not a wide range. If a buyer offers less, you know the number you\u2019re asking for and why."],
-  ["Find and fix what could lower your selling price","The Buyer Discount Scorecard is only the start. We go deeper to find the small problems that add up to a big price cut, like the ones that helped another client get \u20AC300k more. We help fix what we can before you sell."],
-  ["Get an independent, signed valuation","A signed valuation from Nomad, an independent valuation company. If a buyer questions your price, you have a professional report to back it up."],
-  ["Get everything ready for the buyer","Buyers will want to see your financial records, contracts and how the company runs. We help get those ready, so you can answer their questions."],
-  ["Find out what the offer is really worth","A \u20AC5 million offer doesn\u2019t always mean you receive \u20AC5 million. Some may be paid later or depend on future results. We check what could reduce the amount you get before you agree."],
-  ["Help you negotiate the sale","If a buyer tries to lower the price or change the deal, we help you decide what to accept, what to push back on and what to ask for instead."]];
+  ["Set one clear asking price","Know exactly what price to ask for, and why."],
+  ["Find and fix what could lower your selling price","Stop small, hidden problems from adding up to a big price cut."],
+  ["Get an independent, signed valuation","Back up your asking price with a signed valuation from Nomad."],
+  ["Get everything ready for the buyer","Have your financial records and answers ready when buyers ask."],
+  ["Find out what the offer is really worth","Know how much you\u2019ll actually get paid, not just what they offer."],
+  ["Help you negotiate the sale","Get help pushing back when buyers try to lower the price or change the deal."]];
+
  var item=function(i){var x=items[i],on=!!open[i];return h("div",{key:i,onClick:function(){var c={};for(var k in open)c[k]=open[k];c[i]=!on;setOpen(c)},style:{cursor:"pointer",minWidth:0}},
    h("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:8}},
     h("div",{style:{width:34,height:34,borderRadius:17,background:on?NS.gold:"transparent",border:"2px solid "+NS.gold,color:on?NS.navy:NS.gold,fontWeight:800,fontSize:16,display:"grid",placeItems:"center",flex:"none"}},i+1),
@@ -212,10 +213,11 @@ function NsP8({d:t,m:e}){var h=o.default.createElement,f2=nsNum(t.fee2)||5500,v=
  var sh=(0,o.useState)(0),step=sh[0],setStep=sh[1];
  var op=(0,o.useState)({}),open=op[0],setOpen=op[1];
  var items=[
-  ["Find out what your business is worth today","We look at your profits, customers and how the business runs, then give you a written assessment of what it could be worth today. You\u2019ll know where you stand before planning a sale."],
-  ["Find the problems that could lower your selling price","The Buyer Discount Scorecard is only the starting point. We look deeper for small problems that could make a future buyer pay less, and explain why they matter."],
-  ["Find out which problems are worth fixing first","We rank the problems by how much they could affect the sale and how long they might take to fix. So you know where to spend your time and money first."],
-  ["Build your 1\u20133 year plan to get ready to sell","We turn everything into a 1\u20133 year plan: what to work on in the next 90 days, what to improve over time, and which records to get ready for buyers."]];
+  ["Find out what your business is worth today","Know what your business could sell for today, and why."],
+  ["Find the problems that could lower your selling price","Discover hidden problems that could make buyers offer you less."],
+  ["Find out which problems are worth fixing first","Focus your time and money on the changes that matter most to buyers."],
+  ["Build your 1\u20133 year plan to get ready to sell","Know what to work on now, over the next few years, and before you sell."]];
+
  var item=function(i){var x=items[i],on=!!open[i];return h("div",{key:i,onClick:function(){var c={};for(var k in open)c[k]=open[k];c[i]=!on;setOpen(c)},style:{cursor:"pointer",minWidth:0}},
    h("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:8}},
     h("div",{style:{width:34,height:34,borderRadius:17,background:on?NS.gold:"transparent",border:"2px solid "+NS.gold,color:on?NS.navy:NS.gold,fontWeight:800,fontSize:16,display:"grid",placeItems:"center",flex:"none"}},i+1),
