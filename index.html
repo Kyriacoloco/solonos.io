@@ -232,7 +232,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.7";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.8";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -651,12 +651,15 @@ function Leads() {
 
 const LOST_REASONS = ["No reply", "Not selling now", "No-show", "Price", "Chose another firm", "Already has another broker", "Not a fit"];
 
-const BUCKETS = [["overdue", "Overdue"], ["today", "Due today"], ["none", "No next step"], ["future", "Coming up"], ["parked", "Parked (90-day list / quiet)"]];
+const BUCKETS = [["overdue", "Overdue"], ["today", "Due today"], ["none", "No next step"], ["future", "Coming up"], ["parked", "Parked (90-day list / quiet)"], ["closed", "Closed or in engagement"]];
 /** The Leads list: one row per open lead, sorted by what needs doing. Tap a row to open the lead. */
 function LeadsList({ rows, engOf, onOpen }) {
+  const [showClosed, setShowClosed] = useState(false);
+  // leads that are lost, won, disqualified or already engaged do not need a next step
+  const bucketOf = (l) => { const eng = engOf?.(l); if (l.bucket === "overdue" || l.bucket === "today" || l.bucket === "future") return l.bucket; if (/^(lost|won|disqualif)/i.test(l.stage_name ?? "") || (eng && !["deposit_pending"].includes(eng.stage))) return "closed"; return l.bucket ?? "none"; };
   const sorted = [...rows].sort((a, b) => (a.bucket_order - b.bucket_order) || String(a.due_on ?? "9").localeCompare(String(b.due_on ?? "9")) || String(a.due_time ?? "").localeCompare(String(b.due_time ?? "")) || (b.days_since_touch ?? 0) - (a.days_since_touch ?? 0));
-  const groups = BUCKETS.map(([k, label]) => [k, label, sorted.filter((l) => (l.bucket ?? "none") === k)]).filter(([, , r]) => r.length);
-  const edge = (k) => k === "overdue" || k === "none" ? "var(--danger)" : k === "today" ? "var(--accent)" : k === "parked" ? "var(--border-sub)" : "var(--border)";
+  const groups = BUCKETS.map(([k, label]) => [k, label, sorted.filter((l) => bucketOf(l) === k)]).filter(([, , r]) => r.length);
+  const edge = (k) => k === "overdue" || k === "none" ? "var(--danger)" : k === "today" ? "var(--accent)" : k === "parked" || k === "closed" ? "var(--border-sub)" : "var(--border)";
   const next = (l) => {
     if (!l.task_id) return <span className="muted">No next step</span>;
     const what = l.task_channel === "checkin" ? (l.followup_status === "quiet" ? "Quiet check-in" : "90-day check-in") : actionWord({ kind: l.task_kind, channel: l.task_channel });
@@ -668,8 +671,8 @@ function LeadsList({ rows, engOf, onOpen }) {
     <div>
       {groups.map(([k, label, r]) => (
         <div key={k} style={{ marginBottom: 16 }}>
-          <h3 style={{ margin: "0 0 6px", color: k === "overdue" ? "var(--danger)" : "inherit" }}>{label} <span className="muted small" style={{ fontWeight: 400 }}>{r.length}</span></h3>
-          <div className="stack" style={{ gap: 6 }}>
+          <h3 style={{ margin: "0 0 6px", color: k === "overdue" ? "var(--danger)" : "inherit" }}>{label} <span className="muted small" style={{ fontWeight: 400 }}>{r.length}</span>{k === "closed" && <button className="btn" style={{ marginLeft: 10 }} onClick={() => setShowClosed((v) => !v)}>{showClosed ? "Hide" : "Show"}</button>}</h3>
+          {k === "closed" && !showClosed ? null : <div className="stack" style={{ gap: 6 }}>
             {r.map((l) => {
               const eng = engOf?.(l);
               return (
@@ -696,7 +699,7 @@ function LeadsList({ rows, engOf, onOpen }) {
                 </div>
               );
             })}
-          </div>
+          </div>}
         </div>
       ))}
     </div>
