@@ -3,6 +3,12 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<link rel="manifest" href="/manifest.json" />
+<meta name="theme-color" content="#7A0F2B" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Solonos" />
+<link rel="apple-touch-icon" href="/icon-192.png" />
 <title>Solonos</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,600&display=swap" rel="stylesheet" />
@@ -125,6 +131,10 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 .col h3 { padding: 2px 6px 10px; display: flex; justify-content: space-between; }
 .col h3 span { color: var(--muted); font-weight: 400; }
 .lead { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; }
+.leadrow { display: flex; justify-content: space-between; gap: 12px; align-items: center; background: var(--surface); border: 1px solid var(--border-sub); border-radius: 8px; padding: 9px 12px; cursor: pointer; }
+.leadrow:hover { border-color: var(--border); }
+.leadrow-right { text-align: right; flex: none; max-width: 46%; }
+@media (max-width: 760px) { .leadrow { flex-direction: column; align-items: stretch; } .leadrow-right { text-align: left; max-width: none; } }
 .lead:hover { border-color: var(--accent); }
 .lead .name { font-weight: 600; }
 .lead .meta { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; margin-top: 4px; }
@@ -222,7 +232,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.2";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.7";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -519,26 +529,27 @@ function Leads() {
   const boardRef = useRef(null);
   const [activeCol, setActiveCol] = useState(0);
   const [layout, setLayout] = useState(null);   // { order: [keys], hidden: [keys] } from Settings
-  const [seq, setSeq] = useState(null);         // follow-up sequences from Settings
   const [fus, setFus] = useState([]);           // open follow-ups
+  const [dueToday, setDueToday] = useState({}); // opportunity_id -> first task due today or overdue
+  const [onlyDue, setOnlyDue] = useState(false);
+  const [view, setView] = useState(() => { try { return localStorage.getItem("solonos.leadsView") || "list"; } catch (e) { return "list"; } });   // list | board
+  const pickView = (v) => { setView(v); try { localStorage.setItem("solonos.leadsView", v); } catch (e) { /* ignore */ } };
   const loc = useLocation();
-  useEffect(() => {
-    supabase.from("app_settings").select("key, value").in("key", ["leads_board", "followups"]).then(({ data }) => {
-      for (const r of data ?? []) { if (r.key === "leads_board") setLayout(r.value ?? null); if (r.key === "followups") setSeq(r.value ?? null); }
-    });
-  }, []);
+  useEffect(() => { supabase.from("app_settings").select("value").eq("key", "leads_board").maybeSingle().then(({ data }) => setLayout(data?.value ?? null)); }, []);
 
   const load = useCallback(async () => {
-    const [s, l, e, sy, fu] = await Promise.all([
+    const [s, l, e, sy, fu, dt] = await Promise.all([
       supabase.from("pipeline_stages").select("*").order("position"),
-      supabase.from("leads_board").select("*").order("ghl_updated_at", { ascending: false }),
+      supabase.from("leads_list").select("*").order("ghl_updated_at", { ascending: false }),
       supabase.from("engagements").select("id, opportunity_id, stage").not("opportunity_id", "is", null),
       supabase.from("sync_log").select("received_at, ok, kind").eq("ok", true).order("id", { ascending: false }).limit(1).maybeSingle(),
-      supabase.from("followups").select("*").in("status", ["active", "checkin"]),
+      supabase.from("followups").select("*").in("status", ["active", "checkin", "quiet"]).not("opportunity_id", "is", null),
+      supabase.from("tasks_board").select("id, opportunity_id, kind, channel, due_on, due_time, step, steps_total, followup_id").not("opportunity_id", "is", null).lte("due_on", new Date().toISOString().slice(0, 10)).order("due_on"),
     ]);
     setStages(s.data ?? []);
     setLeads(l.data ?? []);
     setFus(fu.data ?? []);
+    const d = {}; for (const t of dt.data ?? []) if (!d[t.opportunity_id]) d[t.opportunity_id] = t; setDueToday(d);
     setEngByOpp(Object.fromEntries((e.data ?? []).map((x) => [x.opportunity_id, x])));
     setLastSync(sy.data);
   }, []);
@@ -546,11 +557,11 @@ function Leads() {
   useEffect(() => { load(); }, [load]);
   const [run, moving] = useAction();
   useEffect(() => {
-    const id = new URLSearchParams(loc.search).get("open");
-    if (id && leads.length) { const l = leads.find((x) => x.ghl_id === id); if (l) setOpen(l); }
+    const q = new URLSearchParams(loc.search), id = q.get("open");
+    if (id && leads.length) { const l = leads.find((x) => x.ghl_id === id); if (l) setOpen({ ...l, _convert: q.get("convert") === "1" }); }
   }, [loc.search, leads]);
   // keep the open drawer in step with fresh data
-  useEffect(() => { if (open) { const l = leads.find((x) => x.ghl_id === open.ghl_id); if (l && l !== open) setOpen(l); } }, [leads]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open) { const l = leads.find((x) => x.ghl_id === open.ghl_id); if (l && l !== open) setOpen({ ...l, _convert: open._convert }); } }, [leads]);  // eslint-disable-line react-hooks/exhaustive-deps
   const fuByOpp = Object.fromEntries(fus.map((f) => [f.opportunity_id, f]));
   const fuOf = (l) => fuByOpp[l.ghl_id];
 
@@ -586,39 +597,21 @@ function Leads() {
     if (ok && reason) await run(() => rpc("set_lost_reason", { p_opportunity_id: id, p_reason: reason }).then(load));
     if (ok && after) await after();
   };
-  // drag onto a Ghost / 90-day column: start that follow-up (switching if one is open); drag out to a GHL column: stop it, then move
-  const dropToFollowup = (id, kind) => run(async () => {
-    const cur = fuByOpp[id];
-    if (cur && ((kind === "checkin" && cur.status === "checkin") || (cur.status === "active" && cur.kind === kind))) return;
-    if (cur) await rpc("followup_cancel", { p_followup: cur.id });
-    await rpc("followup_start", { p_opportunity: id, p_kind: kind });
-    try { await supabase.functions.invoke("ghl-sync", { body: { action: "note", opportunity_id: id, body: `Solonos: follow-up started (${FU_KIND_LABEL[kind]})` } }); } catch (e) { /* best effort */ }
-    await load();
-  }, kind === "checkin" ? "On the 90-day list" : `Follow-up started (${FU_KIND_LABEL[kind]})`);
-  const dropFromFollowup = async (id, stageId) => {
-    const cur = fuByOpp[id];
-    if (cur) { const ok = await run(() => rpc("followup_cancel", { p_followup: cur.id }).then(load), "Follow-up stopped"); if (!ok) return; }
-    const l = leads.find((x) => x.ghl_id === id);
-    if (l && l.stage_id !== stageId) dropTo(id, stageId);
-  };
-  const col = (title, rows, stageId, fuKind) => (
+  const col = (title, rows, stageId) => (
     <div className="col" key={title} style={{ opacity: moving ? .7 : 1 }}
-      onDragOver={(ev) => { if (stageId || fuKind) { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; } }}
-      onDrop={(ev) => { if (!stageId && !fuKind) return; ev.preventDefault(); const id = ev.dataTransfer.getData("text/plain"); if (!id) return; if (fuKind) dropToFollowup(id, fuKind); else dropFromFollowup(id, stageId); }}>
+      onDragOver={(ev) => { if (stageId) { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; } }}
+      onDrop={(ev) => { if (!stageId) return; ev.preventDefault(); const id = ev.dataTransfer.getData("text/plain"); if (id) dropTo(id, stageId); }}>
       <h3>{title}<span>{rows.length}</span></h3>
-      {rows.map((l) => <LeadCard key={l.ghl_id} l={l} eng={engOf(l)} fu={fuOf(l)} seq={seq} onOpen={() => setOpen(l)} draggable={!!stageId || !!fuKind} />)}
+      {rows.map((l) => <LeadCard key={l.ghl_id} l={l} eng={engOf(l)} fu={fuOf(l)} due={dueToday[l.ghl_id]} onOpen={() => setOpen(l)} draggable={!!stageId} />)}
     </div>
   );
-  const inSeq = (l, k) => fuOf(l) && (k === "checkin" ? fuOf(l).status === "checkin" : fuOf(l).status === "active" && fuOf(l).kind === k);
   const allCols = [
-    ...shownStages.map((st) => ({ key: st.ghl_id, title: st.name, rows: inGhl.filter((l) => l.stage_id === st.ghl_id && !fuOf(l)), stageId: st.ghl_id })),
-    { key: "__ghost1", title: "Ghost · after Call 1", rows: inGhl.filter((l) => inSeq(l, "call1")), fuKind: "call1" },
-    { key: "__ghost2", title: "Ghost · after Call 2", rows: inGhl.filter((l) => inSeq(l, "call2")), fuKind: "call2" },
-    { key: "__checkin", title: "90-day check-in", rows: inGhl.filter((l) => inSeq(l, "checkin")), fuKind: "checkin" },
+    ...shownStages.map((st) => ({ key: st.ghl_id, title: st.name, rows: inGhl.filter((l) => l.stage_id === st.ghl_id), stageId: st.ghl_id })),
     { key: "__invited", title: "Invited", rows: leads.filter((l) => engOf(l) && SENT.includes(engOf(l).stage)) },
     { key: "__engaged", title: "Engaged", rows: leads.filter((l) => engOf(l) && ENGAGED.includes(engOf(l).stage)) },
   ];
-  const cols = applyBoardLayout(allCols, layout);
+  const cols = applyBoardLayout(allCols, layout).map((c) => (onlyDue ? { ...c, rows: c.rows.filter((l) => dueToday[l.ghl_id]) } : c));
+  const dueCount = leads.filter((l) => dueToday[l.ghl_id]).length;
   const colNames = cols.map((c) => [c.title, c.rows.length]);
   const goCol = (i) => { const c = boardRef.current?.children[i]; if (c) boardRef.current.scrollTo({ left: c.offsetLeft - boardRef.current.offsetLeft, behavior: "smooth" }); };
   const onBoardScroll = () => {
@@ -630,21 +623,85 @@ function Leads() {
   return (
     <>
       <Head lastSync={lastSync} count={leads.length} reload={load} />
+      <div className="row between" style={{ marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+        <div className="row" style={{ gap: 6 }}>
+          <button className={`btn${onlyDue ? " primary" : ""}`} onClick={() => setOnlyDue((v) => !v)}>Due today · {dueCount}</button>
+          {onlyDue && <span className="muted small hide-sm">Only leads with a touch due today or overdue</span>}
+        </div>
+        <div className="row" style={{ gap: 0 }}>
+          <button className={`btn${view === "list" ? " primary" : ""}`} style={{ borderRadius: "8px 0 0 8px" }} onClick={() => pickView("list")}>List</button>
+          <button className={`btn${view === "board" ? " primary" : ""}`} style={{ borderRadius: "0 8px 8px 0" }} onClick={() => pickView("board")}>Board</button>
+        </div>
+      </div>
+      {view === "list" && <LeadsList rows={onlyDue ? leads.filter((l) => dueToday[l.ghl_id]) : leads} engOf={engOf} onOpen={setOpen} />}
+      {view === "board" && <>
       <div className="stagetabs">
         {colNames.map(([n, c], i) => <button key={n} className={i === activeCol ? "on" : ""} onClick={() => goCol(i)}>{n} · {c}</button>)}
       </div>
       <div className="board" ref={boardRef} onScroll={onBoardScroll}>
-        {cols.map((c) => col(c.title, c.rows, c.stageId, c.fuKind))}
+        {cols.map((c) => col(c.title, c.rows, c.stageId))}
       </div>
-      {open && <LeadDrawer lead={open} engagement={engByOpp[open.ghl_id]} onClose={() => setOpen(null)} reload={load} fu={fuOf(open)} seq={seq}
-        stages={shownStages} onMove={(stageId) => { const id = open.ghl_id; setOpen(null); dropTo(id, stageId); }}
-        onLost={(after) => { const lost = stages.find((st) => isLostStage(st)); setOpen(null); if (lost) { setPendingLost({ id: open.ghl_id, stageId: lost.ghl_id, after }); } else after?.(); }} />}
+      </>}
+      {open && <LeadDrawer lead={open} engagement={engByOpp[open.ghl_id]} onClose={() => setOpen(null)} reload={load} fu={fuOf(open)}
+        stages={shownStages} onMove={(stageId) => { const id = open.ghl_id; setOpen(null); dropTo(id, stageId); }} />}
       {pendingLost && <LostReasonDialog onPick={lostWithReason} onCancel={() => setPendingLost(null)} />}
     </>
   );
 }
 
 const LOST_REASONS = ["No reply", "Not selling now", "No-show", "Price", "Chose another firm", "Already has another broker", "Not a fit"];
+
+const BUCKETS = [["overdue", "Overdue"], ["today", "Due today"], ["none", "No next step"], ["future", "Coming up"], ["parked", "Parked (90-day list / quiet)"]];
+/** The Leads list: one row per open lead, sorted by what needs doing. Tap a row to open the lead. */
+function LeadsList({ rows, engOf, onOpen }) {
+  const sorted = [...rows].sort((a, b) => (a.bucket_order - b.bucket_order) || String(a.due_on ?? "9").localeCompare(String(b.due_on ?? "9")) || String(a.due_time ?? "").localeCompare(String(b.due_time ?? "")) || (b.days_since_touch ?? 0) - (a.days_since_touch ?? 0));
+  const groups = BUCKETS.map(([k, label]) => [k, label, sorted.filter((l) => (l.bucket ?? "none") === k)]).filter(([, , r]) => r.length);
+  const edge = (k) => k === "overdue" || k === "none" ? "var(--danger)" : k === "today" ? "var(--accent)" : k === "parked" ? "var(--border-sub)" : "var(--border)";
+  const next = (l) => {
+    if (!l.task_id) return <span className="muted">No next step</span>;
+    const what = l.task_channel === "checkin" ? (l.followup_status === "quiet" ? "Quiet check-in" : "90-day check-in") : actionWord({ kind: l.task_kind, channel: l.task_channel });
+    const tag = l.followup_id && l.step > 0 ? ` · touch ${l.step} of ${l.steps_total} ${FU_KIND_LABEL[l.followup_kind] ?? ""}` : l.followup_id ? "" : ` · ${l.task_title}`;
+    return <><b>{what}</b><span className="muted small">{tag}</span></>;
+  };
+  if (!rows.length) return <Empty title="No leads">Nothing to show.</Empty>;
+  return (
+    <div>
+      {groups.map(([k, label, r]) => (
+        <div key={k} style={{ marginBottom: 16 }}>
+          <h3 style={{ margin: "0 0 6px", color: k === "overdue" ? "var(--danger)" : "inherit" }}>{label} <span className="muted small" style={{ fontWeight: 400 }}>{r.length}</span></h3>
+          <div className="stack" style={{ gap: 6 }}>
+            {r.map((l) => {
+              const eng = engOf?.(l);
+              return (
+                <div key={l.ghl_id} className="leadrow" onClick={() => onOpen(l)} style={{ borderLeft: `4px solid ${edge(k)}` }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="row" style={{ gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 700 }}>{l.name.split("|")[0].trim()}</span>
+                      <span className="muted small">{l.company || [l.first_name, l.last_name].filter(Boolean).join(" ")}</span>
+                    </div>
+                    <div className="row" style={{ gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                      {eng ? <Chip kind={eng.stage === "declined" ? "danger" : "accent"}>{stageLabel(eng.stage)}</Chip> : l.stage_name && <Chip>{l.stage_name}</Chip>}
+                      {l.call_at && !isNoShow(l) && <Chip kind={new Date(l.call_at) >= new Date() ? "ok" : ""}>{callWhen(l.call_at)}</Chip>}
+                      {isNoShow(l) && !l.followup_id && <Chip kind="danger">No-show</Chip>}
+                      {l.builders > 0 && <Chip kind="brand">Builder sent</Chip>}
+                    </div>
+                  </div>
+                  <div className="leadrow-right">
+                    <div className="small">{next(l)}</div>
+                    <div className="muted small">
+                      {l.due_on ? <span style={{ color: k === "overdue" ? "var(--danger)" : "inherit", fontWeight: k === "overdue" || k === "today" ? 600 : 400 }}>{dueWord(l.due_on)}{l.due_time ? ` ${String(l.due_time).slice(0, 5)}` : ""}</span> : null}
+                      {l.days_since_touch != null && <span>{l.due_on ? " · " : ""}last touch {l.days_since_touch === 0 ? "today" : `${l.days_since_touch}d ago`}</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** Asked once when a lead is dragged to Lost / Not Now. The reason feeds the "Why lost" column on Reports. */
 function LostReasonDialog({ onPick, onCancel }) {
@@ -748,301 +805,172 @@ function NotesLog({ opportunityId, engagementId, title = "My notes" }) {
 }
 
 /** Valuation Builder PDFs attached to a lead; they follow the lead into its engagement. */
-// ===================== Follow-ups (ghost sequences + 90-day check-in) =====================
-const FU_KIND_LABEL = { call1: "after Call 1", call2: "after Call 2", checkin: "90-day check-in" };
-const digitsOf = (p) => String(p ?? "").replace(/[^0-9]/g, "");
-const addWorkingDays = (d, n) => { const x = new Date(d); let k = 0; while (k < n) { x.setDate(x.getDate() + 1); if (x.getDay() !== 0 && x.getDay() !== 6) k++; } return x; };
-const slotText = (d, h) => `${d.toLocaleDateString("en-GB", { weekday: "short" })} ${h}:00`;
-/** Fill {first} {company} {slot1} {slot2} {concern} {point} {booking} in a template. */
-function fuFill(text, lead, extra = {}, seq) {
-  const first = lead.first_name || lead.name.split("|")[0].trim().split(" ")[0];
-  const company = lead.company || lead.name.split("|")[0].trim();
-  const d1 = addWorkingDays(new Date(), 1), d2 = addWorkingDays(new Date(), 2);
-  const vals = { first, company, slot1: slotText(d1, 11), slot2: slotText(d2, 16), booking: seq?.booking || "", concern: "[their concern]", point: "[one useful point]", ...extra };
-  return String(text ?? "").replace(/\{(\w+)\}/g, (m, k) => (vals[k] ?? m));
-}
-const fuDue = (f) => { const t = new Date(); t.setHours(0, 0, 0, 0); const d = new Date(f.next_due + "T00:00:00"); return Math.round((d - t) / 86400000); };
-const fuDueLabel = (f) => { const n = fuDue(f); return n < 0 ? `${-n}d overdue` : n === 0 ? "due today" : n === 1 ? "tomorrow" : `in ${n}d`; };
-const isNoShow = (l) => /noshow|no_show/i.test(l.call_status ?? "") && l.call_at && new Date(l.call_at) < new Date();
-
-/** The chip on a lead card. */
-function FollowupChip({ f, seq }) {
-  if (!f) return null;
-  const n = fuDue(f);
-  const kind = n < 0 ? "danger" : n === 0 ? "warn" : "";
-  if (f.status === "checkin") return <Chip kind={kind} title="90-day check-in">Check-in {fuDueLabel(f)}</Chip>;
-  const st = seq?.[f.kind]?.steps?.[f.step - 1];
-  return <Chip kind={kind} title={st?.title}>Day {st?.day ?? "?"} · {st?.channel?.replace("+", " + ") ?? "touch"} · {fuDueLabel(f)}</Chip>;
-}
-
-/** Everything about one lead's follow-up: start it, work through the touches, log outcomes. */
-function LeadFollowup({ lead, fu, seq, reload, onConvert, onLost }) {
-  const [run, busy] = useAction();
-  const [extra, setExtra] = useState({});       // concern / point typed for this touch
-  const [msg, setMsg] = useState(null);         // edited message text
-  const [checkBack, setCheckBack] = useState("");
-  const [reason, setReason] = useState("");
-  const [nextStep, setNextStep] = useState(lead.next_step_at ?? "");
-  const [touches, setTouches] = useState([]);
-  useEffect(() => { setMsg(null); setExtra({}); }, [fu?.id, fu?.step]);
-  useEffect(() => { supabase.from("followup_touches").select("*").eq("opportunity_id", lead.ghl_id).order("done_at", { ascending: false }).limit(8).then(({ data }) => setTouches(data ?? [])); }, [lead.ghl_id, fu?.last_touch_on, fu?.status]);
-
-  const ghlNote = async (body) => { try { await supabase.functions.invoke("ghl-sync", { body: { action: "note", opportunity_id: lead.ghl_id, body } }); } catch (e) { /* best effort */ } };
-  const start = (kind) => run(async () => { await rpc("followup_start", { p_opportunity: lead.ghl_id, p_kind: kind }); await ghlNote(`Solonos: follow-up started (${FU_KIND_LABEL[kind]})`); await reload(); }, "Follow-up started");
-  const log = (channel, outcome, note, back) => run(async () => {
-    const f = await rpc("followup_log", { p_followup: fu.id, p_channel: channel, p_outcome: outcome, p_note: note || null, p_check_back: back || null });
-    await ghlNote(`Solonos: ${channel} · ${outcome.replace("_", " ")}${note ? " · " + note : ""}${f?.next_due ? " · next " + f.next_due : ""}`);
-    await reload();
-  }, outcome === "no_reply" ? "Logged. Next touch scheduled." : outcome === "replied" ? "Logged. Follow-up closed." : "Logged.");
-  const saveNextStep = (v) => run(async () => { const { error } = await supabase.from("opportunities").update({ next_step_at: v || null }).eq("ghl_id", lead.ghl_id); if (error) throw new Error(error.message); await reload(); }, v ? "Next step date saved" : "Next step date cleared");
-
-  const noShow = isNoShow(lead) && !fu;
-  const silence = (() => {
-    if (!lead.next_step_at || fu) return false;
-    const limit = addWorkingDays(new Date(lead.next_step_at + "T00:00:00"), 3);
-    const lastNote = lead.last_note_at ? new Date(lead.last_note_at) : null;
-    return new Date() > limit && (!lastNote || lastNote < new Date(lead.next_step_at + "T00:00:00"));
-  })();
-  const kindGuess = /showed|offer/i.test(lead.stage_name ?? "") ? "call2" : "call1";
-  const wa = (text) => `https://wa.me/${digitsOf(lead.phone)}?text=${encodeURIComponent(text)}`;
-  const sendMail = (subject, body) => run(async () => {
-    if (!lead.email) throw new Error("This lead has no email");
-    const html = `<div style="font-family:Inter,Arial,sans-serif;font-size:15px;line-height:1.55;color:#2A1E20;max-width:560px">${body.split("\n").map((l) => l ? `<p style="margin:0 0 12px">${l}</p>` : "").join("")}</div>`;
-    await callFn("send-email", { to: lead.email, subject, html });
-  }, "Email sent");
-
-  if (!seq) return <><h3>Follow-up</h3><p className="muted small">Run Part 31 in the SQL editor to switch on follow-ups.</p></>;
-
-  // ---------- not in a sequence
-  if (!fu) {
-    const ns = seq[kindGuess]?.noshow;
-    return (
-      <>
-        <h3>Follow-up</h3>
-        {noShow && (
-          <div className="card" style={{ padding: 12, background: "#F6E3DE", border: "1px solid #D9A79A", marginBottom: 10 }}>
-            <div style={{ fontWeight: 700, color: "var(--danger)", marginBottom: 6 }}>No-show on {callWhen(lead.call_at)}. WhatsApp now.</div>
-            <div className="row wrap">
-              {lead.phone && <a className="btn primary" href={wa(fuFill(ns?.text, lead, {}, seq))} target="_blank" rel="noreferrer">Open WhatsApp</a>}
-              <button className="btn" disabled={busy} onClick={() => start(kindGuess)}>Start sequence ({FU_KIND_LABEL[kindGuess]})</button>
-            </div>
-          </div>
-        )}
-        {silence && (
-          <div className="card" style={{ padding: 12, background: "var(--sunken)", marginBottom: 10 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Three working days of silence since the agreed next step ({day(lead.next_step_at)}). Start the ghost sequence?</div>
-            <div className="row"><button className="btn primary" disabled={busy} onClick={() => start("call1")}>After Call 1</button><button className="btn primary" disabled={busy} onClick={() => start("call2")}>After Call 2</button><button className="btn" disabled={busy} onClick={() => saveNextStep("")}>Not a ghost, clear the date</button></div>
-          </div>
-        )}
-        <div className="row wrap" style={{ marginBottom: 8 }}>
-          <label className="small row" style={{ gap: 6 }}>Next step agreed for <input type="date" value={nextStep} onChange={(x) => setNextStep(x.target.value)} onBlur={() => nextStep !== (lead.next_step_at ?? "") && saveNextStep(nextStep)} /></label>
-        </div>
-        <div className="row wrap" style={{ marginBottom: 16 }}>
-          <button className="btn" disabled={busy} onClick={() => start("call1")}>Start follow-up: after Call 1</button>
-          <button className="btn" disabled={busy} onClick={() => start("call2")}>Start follow-up: after Call 2</button>
-          <button className="btn" disabled={busy} onClick={() => start("checkin")}>Add to 90-day list</button>
-        </div>
-        {touches.length > 0 && <TouchHistory touches={touches} />}
-      </>
-    );
-  }
-
-  // ---------- on the 90-day list
-  if (fu.status === "checkin") {
-    const reasons = seq.checkin_reasons ?? [];
-    return (
-      <>
-        <h3>90-day check-in</h3>
-        <div className="card" style={{ padding: 12, background: "var(--sunken)", marginBottom: 10 }}>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>Next check-in {day(fu.next_due)} ({fuDueLabel(fu)})</div>
-          <p className="muted small" style={{ margin: "0 0 8px" }}>Only with a reason. Pick one, or type your own.</p>
-          <div className="row wrap" style={{ marginBottom: 8 }}>
-            {reasons.map((r) => <button key={r} className={`btn${reason === r ? " primary" : ""}`} onClick={() => setReason(r)}>{r}</button>)}
-          </div>
-          <input value={reason} onChange={(x) => setReason(x.target.value)} placeholder="Reason for this check-in" style={{ width: "100%", marginBottom: 8 }} />
-          <div className="row wrap">
-            {lead.phone && <a className="btn" href={wa(fuFill(`Hi {first}, ${reason || "{point}"}. Has anything changed on your side?`, lead, {}, seq))} target="_blank" rel="noreferrer">WhatsApp</a>}
-            {lead.phone && <a className="btn" href={`tel:${lead.phone}`}>Call</a>}
-            <button className="btn primary" disabled={busy || !reason.trim()} onClick={() => log("checkin", "checkin", reason)}>Log check-in (next in {seq.checkin_days ?? 90} days)</button>
-          </div>
-          <div className="row wrap" style={{ marginTop: 10 }}>
-            <button className="btn" disabled={busy} onClick={() => log("checkin", "replied", reason)}>They replied</button>
-            <label className="small row" style={{ gap: 6 }}>Check back on <input type="date" value={checkBack} onChange={(x) => setCheckBack(x.target.value)} /><button className="btn" disabled={busy || !checkBack} onClick={() => log("checkin", "not_now", reason, checkBack)}>Set</button></label>
-            <button className="btn" disabled={busy} onClick={() => onLost(() => log("checkin", "lost", reason))}>Said no</button>
-            <button className="linklike small" style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer" }} disabled={busy} onClick={() => run(() => rpc("followup_cancel", { p_followup: fu.id }).then(reload), "Removed from the list")}>Remove from list</button>
-          </div>
-        </div>
-        {touches.length > 0 && <TouchHistory touches={touches} />}
-      </>
-    );
-  }
-
-  // ---------- active sequence
-  const s = seq[fu.kind], step = s?.steps?.[fu.step - 1] ?? {}, total = s?.steps?.length ?? 0;
-  const text = msg ?? fuFill(step.text, lead, extra, seq);
-  const subject = fuFill(step.subject ?? "", lead, extra, seq);
-  const chans = String(step.channel ?? "").split("+");
-  const needs = [...String(step.text ?? "").matchAll(/\{(concern|point)\}/g)].map((m) => m[1]);
-  const n = fuDue(fu);
-  return (
-    <>
-      <h3>Follow-up · {FU_KIND_LABEL[fu.kind]} <span className="muted small" style={{ fontWeight: 400 }}>goal: {s?.goal}</span></h3>
-      <div className="card" style={{ padding: 12, background: n < 0 ? "#F6E3DE" : "var(--sunken)", marginBottom: 10 }}>
-        <div className="row between" style={{ marginBottom: 6 }}>
-          <div style={{ fontWeight: 700 }}>Touch {fu.step} of {total} · Day {step.day} · {step.title}</div>
-          <span className={`chip ${n < 0 ? "danger" : n === 0 ? "warn" : ""}`}>{fuDueLabel(fu)}</span>
-        </div>
-        {needs.map((k) => <input key={k} value={extra[k] ?? ""} onChange={(x) => { setExtra({ ...extra, [k]: x.target.value }); setMsg(null); }} placeholder={k === "concern" ? "Their concern, in their words" : "One useful, specific point from their case"} style={{ width: "100%", marginBottom: 6 }} />)}
-        {step.subject && <div className="small" style={{ marginBottom: 4 }}><b>Subject:</b> {subject}</div>}
-        <textarea rows={Math.min(8, Math.max(3, text.split("\n").length + 1))} value={text} onChange={(x) => setMsg(x.target.value)} style={{ width: "100%", marginBottom: 8 }} />
-        <div className="row wrap" style={{ marginBottom: 10 }}>
-          {chans.includes("whatsapp") && lead.phone && <a className="btn primary" href={wa(text)} target="_blank" rel="noreferrer">Open WhatsApp</a>}
-          {(chans.includes("call") || chans.includes("voicemail")) && lead.phone && <a className="btn primary" href={`tel:${lead.phone}`}>Call {lead.phone}</a>}
-          {chans.includes("email") && <button className="btn primary" disabled={busy || !lead.email} onClick={() => sendMail(subject, text)}>Send email from info@</button>}
-          {chans.includes("letter") && <button className="btn primary" disabled={busy} onClick={onConvert}>Convert and send the engagement letter</button>}
-          {!lead.phone && (chans.includes("whatsapp") || chans.includes("call")) && <span className="muted small">No phone number on this lead</span>}
-        </div>
-        <div className="muted small" style={{ marginBottom: 6 }}>Then, what happened?</div>
-        <div className="row wrap">
-          <button className="btn" disabled={busy || fu.last_touch_on === new Date().toISOString().slice(0, 10)} title={fu.last_touch_on === new Date().toISOString().slice(0, 10) ? "One touch a day: already logged today" : ""} onClick={() => log(step.channel, "no_reply", extra.concern || extra.point || "")}>No reply, schedule next</button>
-          <button className="btn" disabled={busy} onClick={() => log(step.channel, "replied")}>They replied</button>
-          <label className="small row" style={{ gap: 6 }}>Not now, check back <input type="date" value={checkBack} onChange={(x) => setCheckBack(x.target.value)} /><button className="btn" disabled={busy || !checkBack} onClick={() => log(step.channel, "not_now", "", checkBack)}>Set</button></label>
-          <button className="btn" disabled={busy} onClick={() => onLost(() => log(step.channel, "lost"))}>Said no</button>
-        </div>
-        <div style={{ marginTop: 8 }}><button className="linklike small" style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", padding: 0 }} disabled={busy} onClick={() => run(() => rpc("followup_cancel", { p_followup: fu.id }).then(reload), "Follow-up stopped")}>Stop this follow-up</button></div>
-      </div>
-      {touches.length > 0 && <TouchHistory touches={touches} />}
-    </>
-  );
-}
-
-function TouchHistory({ touches }) {
-  return (
-    <div className="small" style={{ marginBottom: 14 }}>
-      <div className="muted" style={{ marginBottom: 4 }}>Touches</div>
-      {touches.map((t) => <div key={t.id} className="row between" style={{ padding: "3px 0", borderBottom: "1px solid var(--border-sub)" }}><span>{day(t.done_at)} · {String(t.channel ?? "").replace("+", " + ")} · {t.outcome.replace("_", " ")}{t.note ? ` · ${t.note}` : ""}</span><span className="muted">{t.next_due ? `next ${day(t.next_due)}` : ""}</span></div>)}
-    </div>
-  );
-}
-
-/** Dashboard: everything due today, overdue first (tasks and follow-up touches). */
-function TodayBox() {
-  const [run, busy] = useAction();
-  const [rows, setRows] = useState(null);
-  const load = useCallback(async () => { const { rows } = await loadDue(isoToday()); setRows(rows); }, []);
-  useEffect(() => { load(); }, [load]);
-  const done = (r) => run(() => rpc("task_done", { p_task: r.id }).then(load), "Done");
-  return (
-    <Card title="Today" right={<NavLink to="/app/tasks" className="btn">All tasks</NavLink>} style={{ marginBottom: 18 }}>
-      {!rows ? <span className="muted small">Loading…</span> : rows.length === 0 ? <span className="muted">Nothing due today.</span> : (
-        <div className="stack" style={{ gap: 6 }}>{rows.map((r) => <TaskRow key={r.type + r.id} r={r} onDone={done} busy={busy} />)}</div>
-      )}
-    </Card>
-  );
-}
-
-/** Settings: edit the sequences. */
-function FollowupSettings() {
-  const [run, busy] = useAction();
-  const [seq, setSeq] = useState(null);
-  const [dirty, setDirty] = useState(false);
-  useEffect(() => { supabase.from("app_settings").select("value").eq("key", "followups").maybeSingle().then(({ data }) => setSeq(data?.value ?? null)); }, []);
-  const upd = (fn) => { const c = JSON.parse(JSON.stringify(seq)); fn(c); setSeq(c); setDirty(true); };
-  const save = () => run(async () => {
-    const { error } = await supabase.from("app_settings").upsert({ key: "followups", value: seq, updated_at: new Date().toISOString() });
-    if (error) throw new Error(error.message); setDirty(false);
-  }, "Follow-up sequences saved");
-  if (!seq) return <Card title="Follow-up sequences"><span className="muted small">Run Part 31 in the SQL editor first.</span></Card>;
-  const inp = { width: "100%" };
-  return (
-    <Card title="Follow-up sequences" right={<span className="muted small">Placeholders: {"{first} {company} {slot1} {slot2} {concern} {point} {booking}"}</span>}>
-      <div className="grid2" style={{ marginBottom: 12 }}>
-        <Field label="Check-in list: days between check-ins"><input type="number" value={seq.checkin_days ?? 90} onChange={(x) => upd((c) => { c.checkin_days = Number(x.target.value) || 90; })} /></Field>
-        <Field label="Booking link for {booking}"><input value={seq.booking ?? ""} onChange={(x) => upd((c) => { c.booking = x.target.value; })} placeholder="https://…" /></Field>
-      </div>
-      {["call1", "call2"].map((k) => (
-        <div key={k} style={{ marginBottom: 18 }}>
-          <h3 style={{ marginBottom: 6 }}>Ghost {FU_KIND_LABEL[k]} <span className="muted small" style={{ fontWeight: 400 }}>goal: {seq[k]?.goal}</span></h3>
-          <Field label="No-show WhatsApp (within 10 minutes)"><textarea rows="2" style={inp} value={seq[k]?.noshow?.text ?? ""} onChange={(x) => upd((c) => { c[k].noshow = { ...(c[k].noshow ?? { channel: "whatsapp" }), text: x.target.value }; })} /></Field>
-          {(seq[k]?.steps ?? []).map((st, i) => (
-            <div key={i} className="card" style={{ padding: 10, background: "var(--sunken)", marginTop: 8 }}>
-              <div className="row wrap" style={{ marginBottom: 6 }}>
-                <label className="small row" style={{ gap: 6 }}>Day <input type="number" style={{ width: 64 }} value={st.day} onChange={(x) => upd((c) => { c[k].steps[i].day = Number(x.target.value) || 1; })} /></label>
-                <select value={st.channel} onChange={(x) => upd((c) => { c[k].steps[i].channel = x.target.value; })}>
-                  {["whatsapp", "call+whatsapp", "call+voicemail", "email", "letter"].map((o) => <option key={o} value={o}>{o.replace("+", " + ")}</option>)}
-                </select>
-                <input style={{ flex: 1, minWidth: 180 }} value={st.title} onChange={(x) => upd((c) => { c[k].steps[i].title = x.target.value; })} placeholder="What this touch is" />
-              </div>
-              {["email", "letter"].includes(st.channel) && <input style={{ ...inp, marginBottom: 6 }} value={st.subject ?? ""} onChange={(x) => upd((c) => { c[k].steps[i].subject = x.target.value; })} placeholder="Email subject" />}
-              <textarea rows="3" style={inp} value={st.text ?? ""} onChange={(x) => upd((c) => { c[k].steps[i].text = x.target.value; })} />
-            </div>
-          ))}
-        </div>
-      ))}
-      <div className="row"><button className="btn primary" disabled={busy || !dirty} onClick={save}>Save sequences</button>{dirty && <span className="muted small">Unsaved changes</span>}</div>
-    </Card>
-  );
-}
-
-
-// ===================== Tasks =====================
+// ===================== Tasks (everything is a task) =====================
+const FU_KIND_LABEL = { call1: "after Call 1", call2: "after Call 2", valuation: "after the valuation", letter: "after the engagement letter", draft: "after the draft report", checkin: "90-day check-in" };
+const FU_CHANNELS = [["email", "Email"], ["voicenote", "Voice note (WhatsApp)"], ["call", "Call"], ["whatsapp", "WhatsApp message"]];
+/** Plain text -> paragraphs for the emails you write yourself. */
+const textToHtml = (t) => { const esc = (x) => x.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); return String(t ?? "").replace(/\r/g, "").split(/\n{2,}/).map((pp) => `<p style="margin:0 0 12px">${esc(pp).replace(/\n/g, "<br>")}</p>`).join(""); };
+const mailShell = (inner) => `<div style="font-family:Inter,Arial,sans-serif;max-width:560px;padding:28px 24px;color:#2A1E20;font-size:15px;line-height:1.55"><div style="font:600 20px Georgia,serif;color:#800020;margin-bottom:18px">Consortia Advisory</div>${inner}</div>`;
+/** Saved email wording (Settings > Email templates). */
+async function loadTemplates() { const { data } = await supabase.from("app_settings").select("value").eq("key", "email_templates").maybeSingle(); return data?.value ?? {}; }
+async function saveTemplate(key, tpl) { const cur = await loadTemplates(); const { error } = await supabase.from("app_settings").upsert({ key: "email_templates", value: { ...cur, [key]: tpl }, updated_at: new Date().toISOString() }); if (error) throw new Error(error.message); }
+const DEFAULT_TEMPLATES = {
+  nda: { subject: "{company} - Non Disclosure Agreement", text: "Dear {first},\n\nThank you for our call. As discussed, attached is our Mutual Non-Disclosure Agreement so you can share your financial information with full confidentiality.\n\nPlease sign it and send it back by replying to this email. Once we have it, we will send you the next steps.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
+  builder: { subject: "{company}: your Market Example Range", text: "Hi {first},\n\nThank you for the call today. Attached is the Market Example Range for {company}, built from the figures you gave me on the call.\n\nPlease read it as a market sample, not a valuation: it shows what buyers in your sector are paying today and where {company} would sit on standard assumptions.\n\nIf you would like to go ahead, reply to this email and I will send the engagement letter and the next steps the same day.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
+};
+const fillTpl = (t, v) => String(t ?? "").replace(/\{(\w+)\}/g, (m, k) => (v[k] ?? m));
+const unfill = (t, v) => { let x = String(t ?? ""); for (const [k, val] of Object.entries(v ?? {})) if (val && String(val).length > 1) x = x.split(String(val)).join(`{${k}}`); return x; };
 const TASK_KINDS = [["call", "Call"], ["whatsapp", "WhatsApp"], ["voicenote", "Voice note"], ["email", "Email"], ["meeting", "Meeting"], ["other", "Other"]];
 const taskKindLabel = (k) => (TASK_KINDS.find(([v]) => v === k) ?? [k, k])[1];
 const isoToday = () => new Date().toISOString().slice(0, 10);
 const addDaysIso = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
-const dueWord = (iso) => { const t = new Date(); t.setHours(0, 0, 0, 0); const d = new Date(iso + "T00:00:00"); const n = Math.round((d - t) / 86400000); return n < 0 ? `${-n}d overdue` : n === 0 ? "today" : n === 1 ? "tomorrow" : d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }); };
-
-/** Loads what is due: your tasks plus follow-up touches, merged and sorted. */
-async function loadDue(untilIso) {
-  const [{ data: t }, { data: f }, { data: s }] = await Promise.all([
-    supabase.from("tasks_board").select("*").lte("due_on", untilIso).order("due_on"),
-    supabase.from("followup_board").select("*").lte("next_due", untilIso).order("next_due"),
-    supabase.from("app_settings").select("value").eq("key", "followups").maybeSingle(),
-  ]);
-  const seq = s?.value ?? null;
-  const rows = [
-    ...(t ?? []).map((x) => ({ type: "task", id: x.id, due: x.due_on, who: x.who, first_name: x.first_name, phone: x.phone, email: x.email, kind: x.kind, title: x.title, note: x.note, opportunity_id: x.opportunity_id, engagement_id: x.engagement_id })),
-    ...(f ?? []).map((x) => {
-      const st = x.status === "checkin" ? null : seq?.[x.kind]?.steps?.[x.step - 1];
-      const ch = x.status === "checkin" ? "other" : String(st?.channel ?? "").split("+")[0] || "other";
-      return { type: "followup", id: x.followup_id, due: x.next_due, who: x.name, first_name: x.first_name, phone: x.phone, email: x.email, kind: ch === "call" && String(st?.channel).includes("voicemail") ? "call" : ch, title: x.status === "checkin" ? "90-day check-in" : `${FU_KIND_LABEL[x.kind]} · Day ${st?.day ?? "?"} · ${st?.title ?? ""}`, opportunity_id: x.opportunity_id, f: x, seq };
-    }),
-  ].sort((a, b) => a.due.localeCompare(b.due) || (a.who ?? "").localeCompare(b.who ?? ""));
-  return { rows, seq };
+const daysFromToday = (iso) => { const t = new Date(); t.setHours(0, 0, 0, 0); return Math.round((new Date(iso + "T00:00:00") - t) / 86400000); };
+const dueWord = (iso) => { const n = daysFromToday(iso); return n < 0 ? `${-n}d overdue` : n === 0 ? "today" : n === 1 ? "tomorrow" : new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }); };
+const digitsOf = (p) => String(p ?? "").replace(/[^0-9]/g, "");
+const addWorkingDays = (d, n) => { const x = new Date(d); let k = 0; while (k < n) { x.setDate(x.getDate() + 1); if (x.getDay() !== 0 && x.getDay() !== 6) k++; } return x; };
+const slotText = (d, h) => `${d.toLocaleDateString("en-GB", { weekday: "short" })} ${h}:00`;
+const isNoShow = (l) => /noshow|no_show/i.test(l.call_status ?? "") && l.call_at && new Date(l.call_at) < new Date();
+/** Fill {first} {company} {slot1} {slot2} {concern} {point} {booking}. */
+function fuFill(text, who, extra = {}, seq, kind) {
+  const first = who.first_name || String(who.who ?? who.name ?? "").split("|")[0].trim().split(" ")[0];
+  const company = who.company || String(who.who ?? who.name ?? "").split("|")[0].trim();
+  const d1 = addWorkingDays(new Date(), 1), d2 = addWorkingDays(new Date(), 2);
+  const vals = { first, company, thing: seq?.things?.[kind] || "my last message", slot1: slotText(d1, 11), slot2: slotText(d2, 16), booking: seq?.booking || "[booking link]", concern: "[their concern]", point: "[one useful point]", ...extra };
+  return String(text ?? "").replace(/\{(\w+)\}/g, (m, k) => (vals[k] ?? m));
 }
 
-function TaskRow({ r, onDone, busy }) {
-  const link = r.opportunity_id ? `/app/leads?open=${encodeURIComponent(r.opportunity_id)}` : r.engagement_id ? `/app/engagements/${r.engagement_id}` : null;
-  const n = (() => { const t = new Date(); t.setHours(0, 0, 0, 0); return Math.round((new Date(r.due + "T00:00:00") - t) / 86400000); })();
-  const digits = String(r.phone ?? "").replace(/[^0-9]/g, "");
+/** Small chip on a lead card: "Follow-up 2/4 · Thu". */
+function FollowupChip({ f, due }) {
+  if (due) { const n = daysFromToday(due.due_on); return <Chip kind={n < 0 ? "danger" : "warn"}>{actionWord(due)} {n < 0 ? dueWord(due.due_on) : "today"}</Chip>; }
+  if (!f) return null;
+  const n = f.next_due ? daysFromToday(f.next_due) : 0;
+  const kind = n < 0 ? "danger" : n === 0 ? "warn" : "";
+  if (f.status === "checkin") return <Chip kind={kind}>Check-in {dueWord(f.next_due)}</Chip>;
+  if (f.status === "quiet") return <Chip kind={kind}>Quiet · {dueWord(f.next_due)}</Chip>;
+  return <Chip kind={kind}>Follow-up {f.step}/{f.steps_total ?? "?"} · {dueWord(f.next_due)}</Chip>;
+}
+
+/** One task line with its action buttons and Done. */
+function TaskRow({ t, seq, reload, compact }) {
+  const [run, busy] = useAction();
+  const [ask, setAsk] = useState(false);
+  const [extra, setExtra] = useState({});
+  const [msg, setMsg] = useState(null);
+  const [back, setBack] = useState("");
+  const [reason, setReason] = useState("");
+  const [showMsg, setShowMsg] = useState(true);
+  const isTouch = !!t.followup_id;
+  const isCheckin = t.channel === "checkin";
+  const chans = String(t.channel ?? "").split("+");
+  const text = msg ?? fuFill(t.message, t, extra, seq, t.followup_kind);
+  const subject = fuFill(t.subject ?? "", t, extra, seq, t.followup_kind);
+  const needs = [...String(t.message ?? "").matchAll(/\{(concern|point)\}/g)].map((m) => m[1]);
+  const n = daysFromToday(t.due_on);
+  const link = t.opportunity_id ? `/app/leads?open=${encodeURIComponent(t.opportunity_id)}` : t.engagement_id ? `/app/engagements/${t.engagement_id}` : null;
+  const digits = digitsOf(t.phone);
+  const wa = (x) => `https://wa.me/${digits}?text=${encodeURIComponent(x)}`;
+  const ghlNote = async (body) => { if (!t.opportunity_id) return; try { await supabase.functions.invoke("ghl-sync", { body: { action: "note", opportunity_id: t.opportunity_id, body } }); } catch (e) { /* best effort */ } };
+  const [lostWhy, setLostWhy] = useState(null);    // null | "" | reason
+  const finish = (outcome, note, checkBack) => run(async () => {
+    await rpc("task_done", { p_task: t.id, p_outcome: outcome, p_note: note || null, p_check_back: checkBack || null });
+    if (isTouch) await ghlNote(`Solonos: ${String(t.channel).replace("+", " + ")} · ${outcome.replace("_", " ")}${note ? " · " + note : ""}`);
+    if (outcome === "lost" && t.opportunity_id) {
+      // move the lead to Lost / Not Now in GHL and record why
+      const { data: st } = await supabase.from("pipeline_stages").select("ghl_id").ilike("name", "lost%").order("position").limit(1).maybeSingle();
+      if (st) { const { data: r } = await supabase.functions.invoke("ghl-sync", { body: { action: "move", opportunity_id: t.opportunity_id, stage_id: st.ghl_id } }); if (r && r.ok === false) throw new Error(r.error || "GHL move failed"); }
+      if (note) await rpc("set_lost_reason", { p_opportunity_id: t.opportunity_id, p_reason: note });
+    }
+    setAsk(false); setLostWhy(null); await reload();
+  }, outcome === "done" ? "Done" : outcome === "replied" ? "Closed: they replied" : outcome === "lost" ? "Moved to Lost" : "Logged");
+  const sendMail = () => run(async () => {
+    if (!t.email) throw new Error("No email on this lead");
+    const html = `<div style="font-family:Inter,Arial,sans-serif;font-size:15px;line-height:1.55;color:#2A1E20;max-width:560px">${text.split("\n").map((l) => l ? `<p style="margin:0 0 12px">${l}</p>` : "").join("")}</div>`;
+    await callFn("send-email", { to: t.email, subject, html });
+  }, "Email sent from info@");
+  const who = t.who ? t.who.split("|")[0].trim() : "General";
   return (
-    <div className="row between" style={{ padding: "10px 12px", border: "1px solid var(--border-sub)", borderLeft: `4px solid ${n < 0 ? "var(--danger)" : n === 0 ? "var(--accent)" : "var(--border)"}`, borderRadius: 8, background: "var(--surface)", gap: 10 }}>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 600 }}>{r.who ? r.who.split("|")[0].trim() : "General"} <Chip>{taskKindLabel(r.kind)}</Chip></div>
-        <div className="small" style={{ color: "var(--text-2)" }}>{r.title}{r.note ? ` · ${r.note}` : ""}</div>
-        <div className="muted small">{dueWord(r.due)}{r.type === "followup" ? " · follow-up" : ""}</div>
+    <div style={{ padding: "10px 12px", border: "1px solid var(--border-sub)", borderLeft: `4px solid ${n < 0 ? "var(--danger)" : n === 0 ? "var(--accent)" : "var(--border)"}`, borderRadius: 8, background: "var(--surface)" }}>
+      <div className="row between" style={{ gap: 10, alignItems: "flex-start" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 700 }}>{who} <Chip>{isCheckin ? "Check-in" : taskKindLabel(t.kind)}</Chip>{isTouch && !isCheckin && <span className="muted small"> · touch {t.step}/{t.steps_total} · {FU_KIND_LABEL[t.followup_kind]}</span>}</div>
+          <div style={{ color: "var(--text-2)" }}>{t.title}{t.note && !isTouch ? ` · ${t.note}` : ""}</div>
+          <div className="muted small">{dueWord(t.due_on)}{t.due_time ? ` · ${String(t.due_time).slice(0, 5)}` : ""}{t.stage_name ? ` · ${t.stage_name}` : ""}</div>
+        </div>
+        <div className="row" style={{ flexWrap: "wrap", gap: 6, justifyContent: "flex-end" }}>
+          {digits && (t.kind === "call" || chans.includes("call")) && <a className="btn" href={`tel:${t.phone}`}>Call</a>}
+          {digits && (t.kind === "whatsapp" || chans.includes("whatsapp")) && <a className="btn" href={isTouch ? wa(text) : `https://wa.me/${digits}`} target="_blank" rel="noreferrer">WhatsApp</a>}
+          {digits && t.kind === "voicenote" && <a className="btn" href={`https://wa.me/${digits}`} target="_blank" rel="noreferrer">Open WhatsApp</a>}
+          {digits && t.kind === "call" && isTouch && !chans.includes("whatsapp") && <a className="btn" href={`https://wa.me/${digits}`} target="_blank" rel="noreferrer">WhatsApp</a>}
+          {t.email && t.kind === "email" && isTouch && <button className="btn" disabled={busy} onClick={sendMail}>Send email</button>}
+          {t.email && !isTouch && t.kind === "email" && <a className="btn" href={`mailto:${t.email}`}>Email</a>}
+          {chans.includes("letter") && link && <NavLink className="btn" to={link + "&convert=1"}>Convert + letter</NavLink>}
+          {link && <NavLink className="btn" to={link}>Open</NavLink>}
+          <button className="btn primary" disabled={busy} onClick={() => isTouch ? setAsk((a) => !a) : finish("done")}>Done</button>
+        </div>
       </div>
-      <div className="row" style={{ flexWrap: "nowrap", gap: 6 }}>
-        {digits && (r.kind === "call") && <a className="btn" href={`tel:${r.phone}`}>Call</a>}
-        {digits && (r.kind === "whatsapp" || r.kind === "voicenote") && <a className="btn" href={`https://wa.me/${digits}`} target="_blank" rel="noreferrer">WhatsApp</a>}
-        {r.email && r.kind === "email" && <a className="btn" href={`mailto:${r.email}`}>Email</a>}
-        {link && <NavLink className="btn" to={link}>Open</NavLink>}
-        {r.type === "task" && <button className="btn primary" disabled={busy} onClick={() => onDone(r)}>Done</button>}
-      </div>
+      {isTouch && !isCheckin && (t.message || needs.length > 0) && (
+        <div style={{ marginTop: 8 }}>
+          {!showMsg ? <button className="linklike small" style={{ background: "none", border: "none", padding: 0, color: "var(--accent)", cursor: "pointer" }} onClick={() => setShowMsg(true)}>Show message</button> : (
+            <>
+              {needs.map((k) => <input key={k} value={extra[k] ?? ""} onChange={(x) => { setExtra({ ...extra, [k]: x.target.value }); setMsg(null); }} placeholder={k === "concern" ? "Their concern, in their words" : "One useful, specific point from their case"} style={{ width: "100%", marginBottom: 6 }} />)}
+              {t.subject && <div className="small" style={{ marginBottom: 4 }}><b>Subject:</b> {subject}</div>}
+              <textarea rows={Math.min(7, Math.max(2, text.split("\n").length + 1))} value={text} onChange={(x) => setMsg(x.target.value)} style={{ width: "100%" }} />
+            </>
+          )}
+        </div>
+      )}
+      {ask && isTouch && !isCheckin && (
+        <div className="card" style={{ padding: 10, marginTop: 8, background: "var(--sunken)" }}>
+          <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>Did they reply?</div>
+          <div className="row wrap">
+            <button className="btn" disabled={busy} onClick={() => finish("no_reply", extra.concern || extra.point || "")}>No, keep going</button>
+            <button className="btn primary" disabled={busy} onClick={() => finish("replied")}>Yes</button>
+            <label className="small row" style={{ gap: 6 }}>Not now, check back <input type="date" value={back} onChange={(x) => setBack(x.target.value)} /><button className="btn" disabled={busy || !back} onClick={() => finish("not_now", "", back)}>Set</button></label>
+            <button className="btn" disabled={busy} onClick={() => setLostWhy((w) => (w === null ? "" : null))}>Said no</button>
+          </div>
+          {lostWhy !== null && (
+            <div style={{ marginTop: 8 }}>
+              <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>Why? (moves the lead to Lost / Not Now)</div>
+              <div className="row wrap">{LOST_REASONS.map((r) => <button key={r} className={`btn${lostWhy === r ? " primary" : ""}`} disabled={busy} onClick={() => setLostWhy(r)}>{r}</button>)}
+                <button className="btn primary" disabled={busy || !lostWhy} onClick={() => finish("lost", lostWhy)}>Move to Lost</button></div>
+            </div>
+          )}
+        </div>
+      )}
+      {ask && isCheckin && (
+        <div className="card" style={{ padding: 10, marginTop: 8, background: "var(--sunken)" }}>
+          <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>What was the reason for this check-in?</div>
+          <div className="row wrap" style={{ marginBottom: 6 }}>{(seq?.checkin_reasons ?? []).map((r) => <button key={r} className={`btn${reason === r ? " primary" : ""}`} onClick={() => setReason(r)}>{r}</button>)}</div>
+          <input value={reason} onChange={(x) => setReason(x.target.value)} placeholder="Reason" style={{ width: "100%", marginBottom: 6 }} />
+          <div className="row wrap">
+            <button className="btn primary" disabled={busy || !reason.trim()} onClick={() => finish("checkin", reason)}>Done, next in {t.followup_status === "quiet" ? (seq?.quiet_days ?? 30) : (seq?.checkin_days ?? 90)} days</button>
+            <button className="btn" disabled={busy} onClick={() => finish("replied", reason)}>They replied</button>
+            <button className="btn" disabled={busy} onClick={() => setLostWhy((w) => (w === null ? "" : null))}>Said no</button>
+          </div>
+          {lostWhy !== null && (
+            <div style={{ marginTop: 8 }}>
+              <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>Why? (moves the lead to Lost / Not Now)</div>
+              <div className="row wrap">{LOST_REASONS.map((r) => <button key={r} className={`btn${lostWhy === r ? " primary" : ""}`} disabled={busy} onClick={() => setLostWhy(r)}>{r}</button>)}
+                <button className="btn primary" disabled={busy || !lostWhy} onClick={() => finish("lost", lostWhy)}>Move to Lost</button></div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
+/** Quick add: your own task. */
 function AddTask({ opportunityId, engagementId, onAdded, compact }) {
   const [run, busy] = useAction();
   const [open, setOpen] = useState(!compact);
-  const [f, setF] = useState({ title: "", kind: "call", due_on: isoToday() });
+  const [f, setF] = useState({ title: "", kind: "call", due_on: isoToday(), due_time: "10:00" });
   const add = () => run(async () => {
     if (!f.title.trim()) throw new Error("What is the task?");
     const { data: me } = await supabase.auth.getUser();
-    const { error } = await supabase.from("lead_tasks").insert({ opportunity_id: opportunityId ?? null, engagement_id: engagementId ?? null, title: f.title.trim(), kind: f.kind, due_on: f.due_on, created_by: me?.user?.email ?? "staff" });
+    const { error } = await supabase.from("lead_tasks").insert({ opportunity_id: opportunityId ?? null, engagement_id: engagementId ?? null, title: f.title.trim(), kind: f.kind, due_on: f.due_on, due_time: f.due_time || "09:00", created_by: me?.user?.email ?? "staff" });
     if (error) throw new Error(error.message);
-    setF({ title: "", kind: "call", due_on: isoToday() }); if (compact) setOpen(false); await onAdded?.();
+    setF({ title: "", kind: "call", due_on: isoToday(), due_time: "10:00" }); if (compact) setOpen(false); await onAdded?.();
   }, "Task added");
   if (!open) return <button className="btn" onClick={() => setOpen(true)}>Add task</button>;
   return (
@@ -1050,60 +978,321 @@ function AddTask({ opportunityId, engagementId, onAdded, compact }) {
       <input value={f.title} onChange={(x) => setF({ ...f, title: x.target.value })} onKeyDown={(x) => x.key === "Enter" && add()} placeholder="e.g. Send voice note about the range" style={{ flex: 1, minWidth: 200 }} />
       <select value={f.kind} onChange={(x) => setF({ ...f, kind: x.target.value })}>{TASK_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
       <input type="date" value={f.due_on} onChange={(x) => setF({ ...f, due_on: x.target.value })} />
-      <div className="row" style={{ gap: 4 }}>{[["Today", 0], ["Tmrw", 1], ["+3d", 3], ["+1w", 7]].map(([l, n]) => <button key={l} className={`btn${f.due_on === addDaysIso(n) ? " primary" : ""}`} onClick={() => setF({ ...f, due_on: addDaysIso(n) })}>{l}</button>)}</div>
+      <input type="time" value={f.due_time} onChange={(x) => setF({ ...f, due_time: x.target.value })} />
+      <div className="row" style={{ gap: 4 }}>{[["Today", 0], ["Tmrw", 1], ["+3d", 3], ["+1w", 7]].map(([l, k]) => <button key={l} className={`btn${f.due_on === addDaysIso(k) ? " primary" : ""}`} onClick={() => setF({ ...f, due_on: addDaysIso(k) })}>{l}</button>)}</div>
       <button className="btn primary" disabled={busy} onClick={add}>Add</button>
       {compact && <button className="btn" onClick={() => setOpen(false)}>Cancel</button>}
     </div>
   );
 }
 
-/** Tasks on a lead (drawer section). */
-function LeadTasks({ lead }) {
+/** Suggestions: no-shows and silent leads. One tap starts the follow-up. */
+function Suggestions({ rows, reload }) {
   const [run, busy] = useAction();
-  const [tasks, setTasks] = useState([]);
-  const load = useCallback(async () => { const { data } = await supabase.from("lead_tasks").select("*").eq("opportunity_id", lead.ghl_id).order("done_at", { ascending: true, nullsFirst: true }).order("due_on"); setTasks(data ?? []); }, [lead.ghl_id]);
+  if (!rows?.length) return null;
+  const start = (r, kind) => run(async () => { await rpc("followup_start", { p_opportunity: r.opportunity_id, p_kind: kind }); await reload(); }, `Follow-up started (${FU_KIND_LABEL[kind]})`);
+  const dismiss = (r) => run(async () => { const { error } = await supabase.from("opportunities").update({ next_step_at: null }).eq("ghl_id", r.opportunity_id); if (error) throw new Error(error.message); await reload(); }, "Cleared");
+  return (
+    <Card title="Looks like a ghost" style={{ marginBottom: 16, borderColor: "#D9A79A" }}>
+      <div className="stack" style={{ gap: 6 }}>
+        {rows.map((r) => (
+          <div key={r.opportunity_id} className="row between" style={{ padding: "8px 10px", background: "#FBF1EE", borderRadius: 8, gap: 10 }}>
+            <span><b>{r.name.split("|")[0].trim()}</b> <span className="small" style={{ color: "var(--text-2)" }}>{r.reason === "noshow" ? `no-show ${callWhen(r.call_at)}` : `silent since the next step agreed for ${day(r.next_step_at)}`}</span></span>
+            <span className="row" style={{ gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              {r.reason === "noshow" && digitsOf(r.phone) && <a className="btn" href={`https://wa.me/${digitsOf(r.phone)}?text=${encodeURIComponent(`Hi ${r.first_name || ""}, I'm on the link now. Shall we move it to tomorrow?`)}`} target="_blank" rel="noreferrer">WhatsApp</a>}
+              <button className="btn primary" disabled={busy} onClick={() => start(r, r.suggested_kind)}>Start follow-up {FU_KIND_LABEL[r.suggested_kind]}</button>
+              {r.suggested_kind !== "call1" && <button className="btn" disabled={busy} onClick={() => start(r, "call1")}>{FU_KIND_LABEL.call1}</button>}
+              {r.reason === "silence" && <button className="btn" disabled={busy} onClick={() => dismiss(r)}>Not a ghost</button>}
+            </span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+async function loadTasks(untilIso) {
+  const [{ data: t }, { data: s }, { data: sg }] = await Promise.all([
+    supabase.from("tasks_board").select("*").lte("due_on", untilIso).order("due_on"),
+    supabase.from("app_settings").select("value").eq("key", "followups").maybeSingle(),
+    supabase.from("followup_suggestions").select("*"),
+  ]);
+  return { rows: t ?? [], seq: s?.value ?? null, suggestions: sg ?? [] };
+}
+
+const DAY_GROUPS = [["Overdue", (n) => n < 0], ["Today", (n) => n === 0], ["Tomorrow", (n) => n === 1], ["This week", (n) => n > 1 && n <= 7], ["Later", (n) => n > 7]];
+
+/** The action word for a task, for the glance lists and the board chip. */
+const actionWord = (t) => { const ch = String(t.channel ?? ""); if (t.channel === "checkin") return "Check-in"; if (ch.includes("call")) return "Call"; if (ch === "letter") return "Letter"; return taskKindLabel(t.kind); };
+/** One line per person: time · action · name. Tap opens the lead. */
+function TaskLine({ t }) {
+  const n = daysFromToday(t.due_on);
+  const link = t.opportunity_id ? `/app/leads?open=${encodeURIComponent(t.opportunity_id)}` : t.engagement_id ? `/app/engagements/${t.engagement_id}` : "/app/tasks";
+  const who = t.who ? t.who.split("|")[0].trim() : "General";
+  return (
+    <NavLink to={link} className="row" style={{ gap: 12, padding: "9px 12px", borderRadius: 8, background: "var(--surface)", border: "1px solid var(--border-sub)", borderLeft: `4px solid ${n < 0 ? "var(--danger)" : n === 0 ? "var(--accent)" : "var(--border)"}`, textDecoration: "none", color: "inherit", flexWrap: "nowrap" }}>
+      <span className="muted small" style={{ width: 44, flex: "none", fontVariantNumeric: "tabular-nums" }}>{t.due_time ? String(t.due_time).slice(0, 5) : ""}</span>
+      <span style={{ width: 76, flex: "none", fontWeight: 700 }}>{actionWord(t)}</span>
+      <span style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{who}</span>
+      <span className="muted small" style={{ marginLeft: "auto", flex: "none" }}>{t.followup_id && t.channel !== "checkin" ? `touch ${t.step}/${t.steps_total}` : n !== 0 ? dueWord(t.due_on) : ""}</span>
+    </NavLink>
+  );
+}
+
+/** The Tasks page: grouped by day. */
+function Tasks() {
+  const [data, setData] = useState(null);
+  const load = useCallback(async () => setData(await loadTasks(addDaysIso(60))), []);
   useEffect(() => { load(); }, [load]);
-  const done = (t) => run(() => rpc("task_done", { p_task: t.id }).then(load), "Done");
-  const remove = (t) => run(async () => { const { error } = await supabase.from("lead_tasks").delete().eq("id", t.id); if (error) throw new Error(error.message); await load(); }, "Task removed");
-  const open = tasks.filter((t) => !t.done_at), closed = tasks.filter((t) => t.done_at).slice(0, 5);
+  const groups = DAY_GROUPS.map(([label, test]) => [label, (data?.rows ?? []).filter((t) => test(daysFromToday(t.due_on)))]);
   return (
     <>
-      <h3>Tasks</h3>
-      {open.length === 0 && <p className="muted small" style={{ margin: "0 0 8px" }}>No open tasks for this lead.</p>}
-      {open.map((t) => (
-        <div key={t.id} className="row between small" style={{ marginBottom: 6 }}>
-          <span><b>{t.title}</b> <span className="muted">· {taskKindLabel(t.kind)} · {dueWord(t.due_on)}</span></span>
-          <span className="row"><button className="btn primary" disabled={busy} onClick={() => done(t)}>Done</button><button className="btn" disabled={busy} onClick={() => remove(t)}>Remove</button></span>
-        </div>
-      ))}
-      <div style={{ margin: "6px 0 8px" }}><AddTask opportunityId={lead.ghl_id} onAdded={load} compact /></div>
-      {closed.length > 0 && <div className="muted small" style={{ marginBottom: 12 }}>{closed.map((t) => <div key={t.id}>✓ {t.title} · {day(t.done_at)}</div>)}</div>}
+      <div className="pagehead">
+        <div><h1>Tasks</h1><p className="hide-sm">Who to contact, by day. Tap a name to open the lead and do the touch there.</p></div>
+        <div className="row"><span className="muted small">{(data?.rows ?? []).filter((t) => daysFromToday(t.due_on) <= 0).length} due</span></div>
+      </div>
+      <Suggestions rows={data?.suggestions} reload={load} />
+      <Card title="Add a task" style={{ marginBottom: 16 }}><AddTask onAdded={load} /></Card>
+      {!data ? <span className="muted small">Loading…</span> : (data.rows.length === 0 ? <Empty title="Nothing to do">Add a task above, or start a follow-up on a lead.</Empty> :
+        groups.filter(([, rows]) => rows.length).map(([label, rows]) => (
+          <div key={label} style={{ marginBottom: 18 }}>
+            <h3 style={{ margin: "0 0 8px", color: label === "Overdue" ? "var(--danger)" : "inherit" }}>{label} <span className="muted small" style={{ fontWeight: 400 }}>{rows.length}</span></h3>
+            <div className="stack" style={{ gap: 6 }}>{rows.map((t) => <TaskLine key={t.id} t={t} />)}</div>
+          </div>
+        )))}
     </>
   );
 }
 
-/** The Tasks page: today, overdue, the week ahead, plus a quick add. */
-function Tasks() {
-  const [run, busy] = useAction();
-  const [rows, setRows] = useState(null);
-  const [view, setView] = useState("today");
-  const load = useCallback(async () => { const { rows } = await loadDue(addDaysIso(30)); setRows(rows); }, []);
+/** Dashboard: overdue and today. */
+function TodayBox() {
+  const [data, setData] = useState(null);
+  const load = useCallback(async () => setData(await loadTasks(isoToday())), []);
   useEffect(() => { load(); }, [load]);
-  const today = isoToday(), week = addDaysIso(7);
-  const shown = (rows ?? []).filter((r) => view === "today" ? r.due <= today : view === "week" ? r.due > today && r.due <= week : r.due > week);
-  const counts = { today: (rows ?? []).filter((r) => r.due <= today).length, week: (rows ?? []).filter((r) => r.due > today && r.due <= week).length, later: (rows ?? []).filter((r) => r.due > week).length };
-  const done = (r) => run(() => rpc("task_done", { p_task: r.id }).then(load), "Done");
+  const rows = data?.rows ?? [];
+  return (
+    <Card title="Today" right={<NavLink to="/app/tasks" className="btn">All tasks</NavLink>} style={{ marginBottom: 18 }}>
+      {!data ? <span className="muted small">Loading…</span> : rows.length === 0 && !data.suggestions.length ? <span className="muted">Nothing due today.</span> : (
+        <>
+          {data.suggestions.length > 0 && <div className="small" style={{ marginBottom: 8 }}><NavLink to="/app/tasks">{data.suggestions.length} lead{data.suggestions.length === 1 ? "" : "s"} look like ghosts, see Tasks</NavLink></div>}
+          <div className="stack" style={{ gap: 6 }}>{rows.map((t) => <TaskLine key={t.id} t={t} />)}</div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+/** On the lead: the follow-up status, one Start button, the lead's tasks. */
+function LeadTasks({ lead, fu, reload, engagement }) {
+  const [run, busy] = useAction();
+  const [tasks, setTasks] = useState([]);
+  const [seq, setSeq] = useState(null);
+  const [pick, setPick] = useState(false);
+  const [nextStep, setNextStep] = useState(lead.next_step_at ?? "");
+  const load = useCallback(async () => {
+    const [{ data: t }, { data: s }] = await Promise.all([
+      (engagement ? supabase.from("tasks_board").select("*").or(`engagement_id.eq.${engagement.id}${lead.ghl_id ? `,opportunity_id.eq.${lead.ghl_id}` : ""}`) : supabase.from("tasks_board").select("*").eq("opportunity_id", lead.ghl_id)).order("due_on"),
+      supabase.from("app_settings").select("value").eq("key", "followups").maybeSingle(),
+    ]);
+    setTasks(t ?? []); setSeq(s?.value ?? null);
+  }, [lead.ghl_id, engagement?.id]);
+  useEffect(() => { load(); }, [load, fu?.status, fu?.step]);
+  const both = async () => { await load(); await reload(); };
+  const total = seq?.chase?.steps?.length ?? 5, gap = seq?.gap_days ?? 3;
+  const start = (kind) => run(async () => {
+    await rpc("followup_start", { p_opportunity: lead.ghl_id || null, p_kind: kind, p_engagement: engagement?.id ?? null });
+    if (lead.ghl_id) { try { await supabase.functions.invoke("ghl-sync", { body: { action: "note", opportunity_id: lead.ghl_id, body: `Solonos: follow-up started (${FU_KIND_LABEL[kind]})` } }); } catch (e) { /* best effort */ } }
+    setPick(false); await both();
+  }, kind === "checkin" ? "On the 90-day list" : `Follow-up started: ${total} touches, every ${gap} working days. First one next working day.`);
+  const stop = () => run(async () => { await rpc("followup_cancel", { p_followup: fu.id }); await both(); }, "Follow-up stopped");
+  const saveNextStep = (v) => run(async () => { const { error } = await supabase.from("opportunities").update({ next_step_at: v || null }).eq("ghl_id", lead.ghl_id); if (error) throw new Error(error.message); await reload(); }, v ? "Next step date saved" : "Cleared");
+  const n = fu?.next_due ? daysFromToday(fu.next_due) : null;
   return (
     <>
-      <div className="pagehead">
-        <div><h1>Tasks</h1><p className="hide-sm">Your calls, voice notes and emails for the day, with the follow-up touches that are due.</p></div>
-        <div className="pills">{[["today", `Today · ${counts.today}`], ["week", `This week · ${counts.week}`], ["later", `Later · ${counts.later}`]].map(([k, l]) => <button key={k} className={view === k ? "on" : ""} onClick={() => setView(k)}>{l}</button>)}</div>
-      </div>
-      <Card title="Add a task" style={{ marginBottom: 16 }}><AddTask onAdded={load} /></Card>
-      {!rows ? <span className="muted small">Loading…</span> : shown.length === 0 ? <Empty title={view === "today" ? "Nothing due today" : "Nothing here"}>Add a task above, or start a follow-up on a lead.</Empty> : (
-        <div className="stack" style={{ gap: 8 }}>{shown.map((r) => <TaskRow key={r.type + r.id} r={r} onDone={done} busy={busy} />)}</div>
+      <h3>Follow-up</h3>
+      {fu ? (
+        <div className="row between" style={{ marginBottom: 10, padding: "8px 10px", background: n < 0 ? "#FBF1EE" : "var(--sunken)", borderRadius: 8 }}>
+          <span><b>{fu.status === "checkin" ? "On the 90-day list" : fu.status === "quiet" ? "Quiet client" : `Follow-up ${FU_KIND_LABEL[fu.kind]} · touch ${fu.step}/${fu.steps_total ?? total}`}</b><div className="muted small">next {fu.next_due ? `${day(fu.next_due)} (${dueWord(fu.next_due)})` : "…"}{fu.status === "active" ? ` · every ${gap} working days, ${total} touches, then the 90-day list` : ""}</div></span>
+          <button className="btn" disabled={busy} onClick={stop}>Stop</button>
+        </div>
+      ) : (
+        <div style={{ marginBottom: 10 }}>
+          {isNoShow(lead) && <div className="small" style={{ color: "var(--danger)", fontWeight: 600, marginBottom: 6 }}>No-show on {callWhen(lead.call_at)}.</div>}
+          {!pick ? <button className="btn primary" disabled={busy} onClick={() => setPick(true)}>Start follow-up</button> : (<>
+            <div className="row wrap">
+              {(engagement ? ["draft", "letter"] : ["call1", "valuation", "letter"]).map((k) => <button key={k} className="btn primary" disabled={busy} onClick={() => start(k)}>{FU_KIND_LABEL[k][0].toUpperCase() + FU_KIND_LABEL[k].slice(1)}</button>)}
+              <button className="btn" disabled={busy} onClick={() => start("checkin")}>90-day list</button>
+              <button className="btn" onClick={() => setPick(false)}>Cancel</button>
+            </div>
+            <div className="muted small" style={{ marginTop: 6 }}>{total} touches: first one the next working day, then every {gap} working days. No reply after the last one: {engagement ? "the client goes Quiet" : "90-day list"}.</div>
+          </>)}
+          {!engagement && <label className="small row" style={{ gap: 6, marginTop: 8 }}>Next step agreed for <input type="date" value={nextStep} onChange={(x) => setNextStep(x.target.value)} onBlur={() => nextStep !== (lead.next_step_at ?? "") && saveNextStep(nextStep)} /><span className="muted">(silence after this date flags them as a ghost)</span></label>}
+        </div>
       )}
+      {(() => {
+        const due = tasks.filter((t) => daysFromToday(t.due_on) <= 0);
+        const later = tasks.filter((t) => daysFromToday(t.due_on) > 0);
+        return (
+          <>
+            {due.length > 0 && <div className="small" style={{ fontWeight: 700, margin: "4px 0 6px", color: "var(--accent)" }}>{due.length === 1 ? "To do now" : `To do now (${due.length})`}</div>}
+            <div className="stack" style={{ gap: 6, marginBottom: 10 }}>{due.map((t) => <TaskRow key={t.id} t={t} seq={seq} reload={both} />)}</div>
+            {later.length > 0 && (
+              <div className="small" style={{ marginBottom: 10 }}>
+                <div className="muted" style={{ marginBottom: 4 }}>Planned</div>
+                {later.map((t) => <div key={t.id} className="row between" style={{ padding: "3px 0", borderBottom: "1px solid var(--border-sub)" }}><span>{day(t.due_on)} · {actionWord(t)} · {t.title}</span><span className="muted">{dueWord(t.due_on)}</span></div>)}
+              </div>
+            )}
+            {tasks.length === 0 && <p className="muted small" style={{ margin: "0 0 8px" }}>Nothing planned for this lead.</p>}
+            <div style={{ margin: "0 0 16px" }}><AddTask opportunityId={engagement ? null : lead.ghl_id} engagementId={engagement?.id} onAdded={load} compact /></div>
+          </>
+        );
+      })()}
     </>
+  );
+}
+
+// ===================== Push notifications (installable app) =====================
+const VAPID_PUBLIC_KEY = "BJCXjNCjPI7EahDNh7MjN3Q_A6BQ3glaidaSLHO0S3AtM5kj7GeB-BshAG6KFy-L-OPmve9FTkJEna1aGBKyMxw";
+const b64ToU8 = (b) => { const p = "=".repeat((4 - b.length % 4) % 4); const r = (b + p).replace(/-/g, "+").replace(/_/g, "/"); const raw = atob(r); return Uint8Array.from([...raw].map((c) => c.charCodeAt(0))); };
+async function registerSw() { if (!("serviceWorker" in navigator)) return null; try { return await navigator.serviceWorker.register("/sw.js", { scope: "/" }); } catch (e) { console.warn("sw", e); return null; } }
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+const isIOS = () => /iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+/** Turn notifications on for this device and store the subscription. */
+function NotificationsCard() {
+  const [run, busy] = useAction();
+  const [state, setState] = useState("checking");   // checking | unsupported | install | off | on | denied
+  const refresh = useCallback(async () => {
+    if (!pushSupported()) return setState(isIOS() && !isStandalone() ? "install" : "unsupported");
+    if (Notification.permission === "denied") return setState("denied");
+    const reg = await registerSw(); const sub = reg ? await reg.pushManager.getSubscription() : null;
+    if (!sub) return setState("off");
+    const { data } = await supabase.from("push_subscriptions").select("id").eq("endpoint", sub.endpoint).maybeSingle();
+    setState(data ? "on" : "off");
+  }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+  const enable = () => run(async () => {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { setState("denied"); throw new Error("Notifications were not allowed"); }
+    const reg = await registerSw(); if (!reg) throw new Error("Service worker could not start");
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(VAPID_PUBLIC_KEY) });
+    const j = sub.toJSON(); const { data: me } = await supabase.auth.getUser();
+    const { error } = await supabase.from("push_subscriptions").upsert({ user_id: me.user.id, endpoint: sub.endpoint, keys: j.keys, user_agent: navigator.userAgent }, { onConflict: "endpoint" });
+    if (error) throw new Error(error.message);
+    await reg.showNotification("Solonos", { body: "Notifications are on for this device.", icon: "/icon-192.png" });
+    await refresh();
+  }, "Notifications on");
+  const disable = () => run(async () => {
+    const reg = await registerSw(); const sub = reg ? await reg.pushManager.getSubscription() : null;
+    if (sub) { await supabase.from("push_subscriptions").delete().eq("endpoint", sub.endpoint); await sub.unsubscribe(); }
+    await refresh();
+  }, "Notifications off for this device");
+  const text = {
+    checking: "Checking this device…",
+    unsupported: "This browser cannot receive push notifications. Use Chrome, Edge or Safari on a phone.",
+    install: "On iPhone, add Solonos to your Home Screen first: tap Share, then \"Add to Home Screen\", open it from there and come back here.",
+    off: "Get the morning digest (who to contact today, weekdays at 08:30) and a ping for each task at its time. Weekdays 08:00 to 20:00 only. The digest also goes to info@ by email.",
+    on: "This device gets the morning digest (weekdays at 08:30) and a ping for each task at its time. Weekdays 08:00 to 20:00 only. The digest also goes to info@ by email.",
+    denied: "Notifications are blocked for this site in the browser settings. Allow them there, then try again.",
+  }[state];
+  return (
+    <Card title="Notifications on this device" right={state === "on" ? <span className="chip ok">On</span> : state === "off" ? <span className="chip">Off</span> : null}>
+      <p className="muted small" style={{ margin: "0 0 10px" }}>{text}</p>
+      {state === "off" && <button className="btn primary" disabled={busy} onClick={enable}>Turn on notifications</button>}
+      {state === "on" && <button className="btn" disabled={busy} onClick={disable}>Turn off on this device</button>}
+      {state === "denied" && <button className="btn" disabled={busy} onClick={refresh}>Try again</button>}
+    </Card>
+  );
+}
+
+/** Settings: the one follow-up rhythm and its messages. */
+function FollowupSettings() {
+  const [run, busy] = useAction();
+  const [seq, setSeq] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [preview, setPreview] = useState(null);
+  useEffect(() => { supabase.from("app_settings").select("value").eq("key", "followups").maybeSingle().then(({ data }) => setSeq(data?.value ?? null)); }, []);
+  const upd = (fn) => { const c = JSON.parse(JSON.stringify(seq)); fn(c); setSeq(c); setDirty(true); };
+  const save = () => run(async () => {
+    const { error } = await supabase.from("app_settings").upsert({ key: "followups", value: seq, updated_at: new Date().toISOString() });
+    if (error) throw new Error(error.message); setDirty(false);
+  }, "Follow-up settings saved");
+  const showDigest = () => run(async () => { const d = await rpc("morning_digest"); setPreview(d ?? { empty: true }); });
+  if (!seq) return <Card title="Follow-up"><span className="muted small">Run Part 35 in the SQL editor first.</span></Card>;
+  if (!seq.chase) return <Card title="Follow-up"><span className="muted small">The settings are from an older version. Run Part 35 in the SQL editor.</span></Card>;
+  const inp = { width: "100%" };
+  const num = (k, d) => <input type="number" min="0" style={{ width: 70 }} value={seq[k] ?? d} onChange={(x) => upd((c) => { c[k] = Number(x.target.value) || d; })} />;
+  return (
+    <>
+      <Card title="Follow-up rhythm" right={<span className="muted small">Placeholders: {"{first} {company} {thing} {slot1} {slot2} {point} {booking}"}</span>}>
+        <p className="muted small" style={{ margin: "0 0 12px" }}>One rule for everything: after a call, a valuation, a letter or a draft, the first touch comes the next working day, then one every few working days. Weekends and Cyprus/Greek holidays are skipped. Changes apply to follow-ups started from now on.</p>
+        <div className="row wrap" style={{ gap: 14, marginBottom: 12 }}>
+          <label className="small row" style={{ gap: 6 }}>First touch after {num("first_day", 1)} working day(s)</label>
+          <label className="small row" style={{ gap: 6 }}>then every {num("gap_days", 3)} working days</label>
+          <label className="small row" style={{ gap: 6 }}>No reply: lead parked for {num("checkin_days", 90)} days</label>
+          <label className="small row" style={{ gap: 6 }}>quiet client checked every {num("quiet_days", 30)} days</label>
+        </div>
+        <div className="row wrap" style={{ marginBottom: 12, gap: 10 }}>
+          {[["call", "Calls at"], ["voicenote", "Voice notes at"], ["whatsapp", "WhatsApp at"], ["email", "Emails at"], ["checkin", "Check-ins at"]].map(([k, l]) => (
+            <label key={k} className="small row" style={{ gap: 6 }}>{l} <input type="time" value={seq.times?.[k] ?? "09:00"} onChange={(x) => upd((c) => { c.times = { ...(c.times ?? {}), [k]: x.target.value }; })} /></label>
+          ))}
+          <label className="small row" style={{ gap: 6 }}>Morning digest at <input type="time" value={seq.digest_time ?? "08:30"} onChange={(x) => upd((c) => { c.digest_time = x.target.value; })} /></label>
+        </div>
+        <Field label="Booking link for {booking}"><input value={seq.booking ?? ""} onChange={(x) => upd((c) => { c.booking = x.target.value; })} placeholder="https://…" /></Field>
+        <h3 style={{ margin: "14px 0 6px" }}>The {seq.chase.steps.length} touches</h3>
+        {seq.chase.steps.map((st, i) => (
+          <div key={i} className="card" style={{ padding: 10, background: "var(--sunken)", marginTop: 8 }}>
+            <div className="row wrap" style={{ marginBottom: 6 }}>
+              <b className="small" style={{ width: 60 }}>Touch {i + 1}</b>
+              <select value={st.channel} onChange={(x) => upd((c) => { c.chase.steps[i].channel = x.target.value; })}>
+                {FU_CHANNELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+              <input style={{ flex: 1, minWidth: 180 }} value={st.title ?? ""} onChange={(x) => upd((c) => { c.chase.steps[i].title = x.target.value; })} placeholder="What this touch is" />
+            </div>
+            {st.channel === "email" && <input style={{ ...inp, marginBottom: 6 }} value={st.subject ?? ""} onChange={(x) => upd((c) => { c.chase.steps[i].subject = x.target.value; })} placeholder="Email subject" />}
+            <textarea rows="3" style={inp} value={st.text ?? ""} onChange={(x) => upd((c) => { c.chase.steps[i].text = x.target.value; })} placeholder={st.channel === "voicenote" ? "What to say in the voice note" : "Message"} />
+          </div>
+        ))}
+        <h3 style={{ margin: "16px 0 6px" }}>What {"{thing}"} means, per situation</h3>
+        <div className="grid2">
+          {["call1", "valuation", "letter", "draft"].map((k) => <Field key={k} label={FU_KIND_LABEL[k][0].toUpperCase() + FU_KIND_LABEL[k].slice(1)}><input value={seq.things?.[k] ?? ""} onChange={(x) => upd((c) => { c.things = { ...(c.things ?? {}), [k]: x.target.value }; })} /></Field>)}
+        </div>
+        <h3 style={{ margin: "16px 0 6px" }}>First touch after Call 1 <span className="muted small" style={{ fontWeight: 400 }}>(the first email is different after a call; leave empty to use touch 1 above)</span></h3>
+        <input style={{ ...inp, marginBottom: 6 }} value={seq.first_touch?.call1?.subject ?? ""} onChange={(x) => upd((c) => { c.first_touch = c.first_touch ?? {}; c.first_touch.call1 = { ...(c.first_touch.call1 ?? {}), subject: x.target.value }; })} placeholder="Email subject" />
+        <textarea rows="4" style={inp} value={seq.first_touch?.call1?.text ?? ""} onChange={(x) => upd((c) => { c.first_touch = c.first_touch ?? {}; c.first_touch.call1 = { ...(c.first_touch.call1 ?? {}), text: x.target.value }; })} />
+        <div className="row" style={{ marginTop: 12 }}><button className="btn primary" disabled={busy || !dirty} onClick={save}>Save</button>{dirty && <span className="muted small">Unsaved changes</span>}<button className="btn" disabled={busy} onClick={showDigest}>Preview today's digest</button></div>
+        {preview && <pre className="small" style={{ marginTop: 10, whiteSpace: "pre-wrap", background: "var(--sunken)", padding: 10, borderRadius: 8 }}>{preview.empty ? "Nothing due and nothing overdue: no digest would be sent today." : `${preview.n_today} to contact today, ${preview.n_overdue} overdue\n` + (preview.rows ?? []).map((r) => `${r.overdue ? "OVERDUE " : ""}${r.time} ${taskKindLabel(r.kind)} ${r.who}${r.step > 0 ? ` · touch ${r.step} of ${r.steps_total}` : ""}`).join("\n") + ((preview.events ?? []).length ? `\nOvernight: ${preview.events.map((e) => `${e.who}: ${e.action}`).join("; ")}` : "")}</pre>}
+      </Card>
+      <div style={{ height: 18 }} />
+      <EmailTemplates />
+    </>
+  );
+}
+
+/** Settings: the default wording of the emails you write yourself. Sending one with "keep as default" ticked updates these. */
+function EmailTemplates() {
+  const [run, busy] = useAction();
+  const [t, setT] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => { loadTemplates().then((v) => setT({ nda: v.nda ?? DEFAULT_TEMPLATES.nda, builder: v.builder ?? DEFAULT_TEMPLATES.builder })); }, []);
+  const upd = (k, f, v) => { setT({ ...t, [k]: { ...t[k], [f]: v } }); setDirty(true); };
+  const save = () => run(async () => {
+    const { error } = await supabase.from("app_settings").upsert({ key: "email_templates", value: t, updated_at: new Date().toISOString() });
+    if (error) throw new Error(error.message); setDirty(false);
+  }, "Email templates saved");
+  if (!t) return null;
+  return (
+    <Card title="Email templates" right={<span className="muted small">Placeholders: {"{first} {company}"}</span>}>
+      {[["nda", "NDA email (from the lead)"], ["builder", "Valuation email (Send to client)"]].map(([k, label]) => (
+        <div key={k} style={{ marginBottom: 14 }}>
+          <h3 style={{ margin: "0 0 6px" }}>{label}</h3>
+          <input style={{ width: "100%", marginBottom: 6 }} value={t[k].subject} onChange={(x) => upd(k, "subject", x.target.value)} placeholder="Subject" />
+          <textarea rows="7" style={{ width: "100%" }} value={t[k].text} onChange={(x) => upd(k, "text", x.target.value)} />
+        </div>
+      ))}
+      <div className="row"><button className="btn primary" disabled={busy || !dirty} onClick={save}>Save templates</button>{dirty && <span className="muted small">Unsaved changes</span>}</div>
+    </Card>
   );
 }
 
@@ -1129,11 +1318,20 @@ function LeadNda({ lead }) {
     country: last?.country ?? (lead.country === "CY" ? "" : (lead.country || "")),
   });
   const set = (k) => (x) => setForm({ ...form, [k]: x.target.type === "checkbox" ? x.target.checked : x.target.value });
-  const generate = (send) => run(async () => {
+  const [mail, setMail] = useState(null);   // the email being written
+  const generate = (send, m) => run(async () => {
     const party = form.is_individual ? form.signatory_name : form.party_name;
-    await callFn("engagement-send", { kind: "lead_nda", opportunity_id: lead.ghl_id, ...form, party_name: party, send });
-    setForm(null); await load();
-  }, send ? "NDA generated and emailed to the client" : "NDA generated");
+    await callFn("engagement-send", { kind: "lead_nda", opportunity_id: lead.ghl_id, ...form, party_name: party, send, email: m?.to ?? form.email, email_subject: m?.subject, email_text: m?.text });
+    if (send && m?.saveTpl) { try { await saveTemplate("nda", { subject: unfill(m.subject, mail?.vars), text: unfill(m.text, mail?.vars) }); } catch (e) { /* best effort */ } }
+    if (send) { try { await rpc("followup_start", { p_opportunity: lead.ghl_id, p_kind: "call1" }); } catch (e) { console.warn("follow-up", e); } }
+    setMail(null); setForm(null); await load();
+  }, send ? "NDA emailed. Follow-up starts next working day" : "NDA generated");
+  const writeMail = async () => {
+    const tpl = (await loadTemplates()).nda ?? DEFAULT_TEMPLATES.nda;
+    const party = form.is_individual ? form.signatory_name : form.party_name;
+    const v = { first: String(form.signatory_name || party).trim().split(/\s+/)[0], company: party };
+    setMail({ to: form.email || lead.email || "", subject: fillTpl(tpl.subject, v), text: fillTpl(tpl.text, v), vars: v, title: `${party} - Non Disclosure Agreement` });
+  };
   const uploadSigned = (file, src) => { if (!file) return; run(async () => {
     const party = src?.meta?.party_name || lead.company || lead.name.split("|")[0].trim();
     const title = `${party} - Non Disclosure Agreement - signed`;
@@ -1161,6 +1359,7 @@ function LeadNda({ lead }) {
           </span>
         </div>
       ))}
+      {mail && <EmailDialog title={`Send the NDA to ${mail.vars.first}`} to={mail.to} subject={mail.subject} text={mail.text} attached={`${mail.title}.pdf`} then="Follow-up starts: first touch next working day, then every 3 working days" busy={busy} onSend={(m) => generate(true, m)} onCancel={() => setMail(null)} />}
       {!form ? (
         !hasSigned && <button className="btn" disabled={busy} onClick={openForm} style={{ marginBottom: 16 }}>{docs.length ? "Create a new NDA" : "Create NDA"}</button>
       ) : (
@@ -1175,11 +1374,11 @@ function LeadNda({ lead }) {
             <Field label={form.is_individual ? "Home address" : "Registered address"}><input value={form.address} onChange={set("address")} placeholder="Street, city, postcode" /></Field>
             <div className="grid2">
               {!form.is_individual && <Field label="Country of incorporation"><input value={form.country} onChange={set("country")} placeholder="e.g. Italy" /></Field>}
-              <Field label="Email (only if you email it now)"><input type="email" value={form.email} onChange={set("email")} /></Field>
+              <Field label="Email (you can change it before sending)"><input type="email" value={form.email} onChange={set("email")} /></Field>
             </div>
             <div className="row">
               <button className="btn primary" disabled={busy || !form.address || (form.is_individual ? !form.signatory_name : !(form.party_name && form.country))} onClick={() => generate(false)}>Generate NDA</button>
-              <button className="btn" disabled={busy || !form.email || !form.address || (form.is_individual ? !form.signatory_name : !(form.party_name && form.country))} onClick={() => generate(true)}>Generate and email to client</button>
+              <button className="btn" disabled={busy || !form.address || (form.is_individual ? !form.signatory_name : !(form.party_name && form.country))} onClick={writeMail}>Generate and email to client</button>
               <button className="btn" disabled={busy} onClick={() => setForm(null)}>Cancel</button>
             </div>
           </div>
@@ -1189,45 +1388,34 @@ function LeadNda({ lead }) {
   );
 }
 
-/** The email that carries the Market Example Range after Call 1. Edit the wording here. */
-function builderEmail({ first, company, personal }) {
-  const p = (t) => `<p style="margin:0 0 14px">${t}</p>`;
-  return `<div style="font-family:Inter,Arial,sans-serif;max-width:560px;padding:28px 24px;color:#2A1E20;font-size:15px;line-height:1.55">
-<div style="font:600 20px Georgia,serif;color:#800020;margin-bottom:18px">Consortia Advisory</div>
-${p(`Hi ${first},`)}
-${p(`Thank you for the call today. Attached is the Market Example Range for <strong>${company}</strong>, built from the figures you gave me on the call.`)}
-${personal ? p(personal.replace(/\n/g, "<br>")) : ""}
-${p(`Please read it as a market sample, not a valuation: it shows what buyers in your sector are paying today and where ${company} would sit on standard assumptions. The three issues on the last page are the ones a buyer will find in the first week of diligence, and each one is fixable.`)}
-${p(`The full valuation report replaces the standard assumptions with your actual numbers, documents every input to IVS standard and is signed by an independent valuer, so it holds up in front of a buyer, a bank or a tax authority. If you would like to go ahead, reply to this email and I will send the engagement letter and the next steps the same day.`)}
-${p(`Happy to answer any question on the numbers in the meantime.`)}
-<p style="margin:22px 0 0">Kind regards,<br><strong>Kyriacos</strong><br><span style="color:#6B5457">UK-Qualified Chartered Accountant (ICAEW)<br>Consortia Advisory</span></p>
-</div>`;
-}
-
-function SendBuilderDialog({ doc, lead, onSend, onCancel }) {
-  const [personal, setPersonal] = useState("");
-  const company = doc.name.replace(/ - Market Example Range$/, "");
+/** The email you write yourself: To, Subject and the full text are editable. What you send becomes the default for next time. */
+function EmailDialog({ title, to, subject, text, attached, then, onSend, onCancel, busy }) {
+  const [f, setF] = useState({ to: to || "", subject: subject || "", text: text || "" });
+  const [saveTpl, setSaveTpl] = useState(true);
   useEffect(() => {
     const k = (e) => e.key === "Escape" && onCancel();
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, [onCancel]);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const ok = /\S+@\S+\.\S+/.test(f.to) && f.subject.trim() && f.text.trim();
   return (
     <div className="modal-bg" onClick={onCancel}>
-      <div className="modal" style={{ width: "min(560px, 92vw)" }} role="dialog" aria-label="Send to client" onClick={(e) => e.stopPropagation()}>
-        <h2>Send to {lead.first_name || lead.name.split("|")[0].trim()}</h2>
-        <dl className="kv" style={{ margin: "12px 0" }}>
-          <dt>To</dt><dd>{lead.email}</dd>
-          <dt>Subject</dt><dd>{company}: your Market Example Range</dd>
-          <dt>Attached</dt><dd>{doc.name}.pdf</dd>
-          <dt>Then</dt><dd>Lead moves to Full Offer Made</dd>
-        </dl>
-        <Field label="Add a personal line (optional, goes after the first paragraph)">
-          <textarea rows="3" value={personal} onChange={(e) => setPersonal(e.target.value)} placeholder="e.g. As discussed, the owner-dependence point is the one I would fix first." />
-        </Field>
-        <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+      <div className="modal" style={{ width: "min(640px, 94vw)" }} role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>
+        <h2>{title}</h2>
+        <div className="stack" style={{ gap: 10, margin: "12px 0" }}>
+          <Field label="To"><input type="email" value={f.to} onChange={set("to")} /></Field>
+          <Field label="Subject"><input value={f.subject} onChange={set("subject")} /></Field>
+          <Field label="Email"><textarea rows={12} value={f.text} onChange={set("text")} style={{ width: "100%", fontFamily: "inherit" }} /></Field>
+          <dl className="kv" style={{ margin: 0 }}>
+            {attached && <><dt>Attached</dt><dd>{attached}</dd></>}
+            {then && <><dt>Then</dt><dd>{then}</dd></>}
+          </dl>
+          <label className="check small"><input type="checkbox" checked={saveTpl} onChange={(e) => setSaveTpl(e.target.checked)} />Keep this wording as the default for next time</label>
+        </div>
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 8 }}>
           <button className="btn" onClick={onCancel}>Cancel</button>
-          <button className="btn primary" onClick={() => onSend(personal.trim())}>Send email</button>
+          <button className="btn primary" disabled={busy || !ok} onClick={() => onSend({ to: f.to.trim(), subject: f.subject.trim(), text: f.text.trim(), saveTpl })}>Send email</button>
         </div>
       </div>
     </div>
@@ -1259,22 +1447,32 @@ function LeadBuilders({ lead, reload }) {
     }, "Valuation Builder saved on this lead");
   }
   const [sending, setSending] = useState(null);   // the document about to be emailed
-  async function sendToClient(d, personal) {
+  const [draft, setDraft] = useState(null);      // { to, subject, text } for the dialog
+  const openSend = async (d) => {
+    const tpl = (await loadTemplates()).builder ?? DEFAULT_TEMPLATES.builder;
+    const company = d.name.replace(/ - Market Example Range$/, "");
+    const first = lead.first_name || lead.name.split("|")[0].trim().split(" ")[0];
+    const v = { first, company };
+    setDraft({ to: lead.email || "", subject: fillTpl(tpl.subject, v), text: fillTpl(tpl.text, v), vars: v });
+    setSending(d);
+  };
+  async function sendToClient(d, m) {
     setSending(null);
     await run(async () => {
-      if (!lead.email) throw new Error("This lead has no email address in GHL");
       const blob = await (await fetch(await signedUrl(d.storage_path))).blob();
       const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = () => rej(new Error("Could not read the PDF")); r.readAsDataURL(blob); });
       const company = d.name.replace(/ - Market Example Range$/, "");
-      const first = lead.first_name || lead.name.split("|")[0].trim().split(" ")[0];
       await callFn("send-email", {
-        to: lead.email, subject: `${company}: your Market Example Range`,
-        html: builderEmail({ first, company, personal }),
+        to: m.to, subject: m.subject,
+        html: mailShell(textToHtml(m.text)),
         attachment: { filename: `${company} - Market Example Range.pdf`, contentBase64: b64, contentType: "application/pdf" },
       });
+      if (m.saveTpl) { try { await saveTemplate("builder", { subject: unfill(m.subject, draft?.vars), text: unfill(m.text, draft?.vars) }); } catch (e) { /* best effort */ } }
       await supabase.from("documents").update({ sent_at: new Date().toISOString() }).eq("id", d.id);
       const { data: me } = await supabase.auth.getUser();
-      await supabase.from("lead_notes").insert({ opportunity_id: lead.ghl_id, body: `Market Example Range emailed to ${lead.email}`, author: me?.user?.email ?? "staff" });
+      await supabase.from("lead_notes").insert({ opportunity_id: lead.ghl_id, body: `Market Example Range emailed to ${m.to}`, author: me?.user?.email ?? "staff" });
+      // the follow-up starts by itself: touch 1 the next working day, then every 3 working days
+      try { await rpc("followup_start", { p_opportunity: lead.ghl_id, p_kind: "valuation" }); } catch (e) { console.warn("follow-up", e); }
       // the offer is out: the lead moves to Full Offer Made in GHL
       const { data: st } = await supabase.from("pipeline_stages").select("ghl_id").ilike("name", "full offer%").maybeSingle();
       if (st && lead.stage_id !== st.ghl_id) {
@@ -1283,7 +1481,7 @@ function LeadBuilders({ lead, reload }) {
         if (data?.ok === false) throw new Error("Email sent, but the move to Full Offer Made failed: " + data.error);
       }
       await load(); await reload?.();
-    }, "Sent to the client and moved to Full Offer Made");
+    }, "Sent. Lead moved to Full Offer Made; follow-up starts next working day");
   }
   const remove = (d) => run(async () => {
     await supabase.storage.from("deliverables").remove([d.storage_path.replace(/^deliverables\//, "")]);
@@ -1300,13 +1498,13 @@ function LeadBuilders({ lead, reload }) {
           <div key={d.id} className="row between small">
             <span>{d.name}<div className="muted">{ago(d.created_at)}{d.sent_at && <> · <span style={{ color: "var(--ok)" }}>sent {day(d.sent_at)}</span></>}</div></span>
             <span className="row">
-              <button className="btn primary" disabled={busy || !lead.email} title={lead.email ? `Email to ${lead.email}` : "No email on this lead"} onClick={() => setSending(d)}>{d.sent_at ? "Send again" : "Send to client"}</button>
+              <button className="btn primary" disabled={busy} onClick={() => openSend(d)}>{d.sent_at ? "Send again" : "Send to client"}</button>
               <button className="btn" onClick={() => open(d.storage_path)}>Open</button>
               <button className="btn" disabled={busy} onClick={() => remove(d)}>Remove</button>
             </span>
           </div>
         ))}
-        {sending && <SendBuilderDialog doc={sending} lead={lead} onSend={(personal) => sendToClient(sending, personal)} onCancel={() => setSending(null)} />}
+        {sending && draft && <EmailDialog title={`Send to ${lead.first_name || lead.name.split("|")[0].trim()}`} to={draft.to} subject={draft.subject} text={draft.text} attached={`${sending.name}.pdf`} then="Lead moves to Full Offer Made and the follow-up starts (first touch next working day)" busy={busy} onSend={(m) => sendToClient(sending, m)} onCancel={() => setSending(null)} />}
         <div className="row">
           <a className="btn primary" href={`/ConsortiaValuationBuilder.html?lead=${encodeURIComponent(lead.ghl_id)}&v=${Date.now()}`} target="_blank" rel="noreferrer">Open Valuation Builder for this lead</a>
           <label className="btn" style={{ cursor: "pointer" }}>{busy ? "Uploading…" : "Attach a PDF"}<input type="file" accept=".pdf" style={{ display: "none" }} disabled={busy} onChange={(x) => x.target.files[0] && upload(x.target.files[0])} /></label>
@@ -1316,7 +1514,7 @@ function LeadBuilders({ lead, reload }) {
   );
 }
 
-function LeadCard({ l, eng, fu, seq, onOpen, draggable }) {
+function LeadCard({ l, eng, fu, due, onOpen, draggable }) {
   return (
     <div className="lead" onClick={onOpen} draggable={draggable} onDragStart={(ev) => { ev.dataTransfer.setData("text/plain", l.ghl_id); ev.dataTransfer.effectAllowed = "move"; }}>
       <div className="name">{l.name}</div>
@@ -1332,7 +1530,7 @@ function LeadCard({ l, eng, fu, seq, onOpen, draggable }) {
         {l.lost_reason && <Chip kind="danger">{l.lost_reason}</Chip>}
         {l.call_at && !isNoShow(l) && <Chip kind={new Date(l.call_at) >= new Date() ? "ok" : ""} title={l.call_title || "Call"}>{callWhen(l.call_at)}</Chip>}
         {isNoShow(l) && !fu && <Chip kind="danger" title={callWhen(l.call_at)}>No-show</Chip>}
-        <FollowupChip f={fu} seq={seq} />
+        <FollowupChip f={fu} due={due} />
         {eng && <Chip kind={eng.stage === "declined" ? "danger" : "accent"}>{stageLabel(eng.stage)}</Chip>}
       </div>
     </div>
@@ -1433,7 +1631,7 @@ function Head({ lastSync, count, reload }) {
   }
   return (
     <div className="pagehead">
-      <div><h1>Leads</h1><p className="hide-sm">Your GHL pipeline. Drag a card to another column and it moves in GHL too. Convert a lead to start an engagement.</p></div>
+      <div><h1>Leads</h1><p className="hide-sm">Who needs you next. The board view mirrors GHL: drag a card to another column and it moves there too.</p></div>
       <div className="row">
         <span className="muted small">
           {count != null && `${count} open · `}
@@ -1445,13 +1643,13 @@ function Head({ lastSync, count, reload }) {
   );
 }
 
-function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove, fu, seq, onLost }) {
+function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove, fu }) {
   const nav = useNavigate();
   const [run, busy] = useAction();
   const [recs, setRecs] = useState([]);
   const [fathom, setFathom] = useState("");
   const [callNo, setCallNo] = useState(1);
-  const [convert, setConvert] = useState(false);
+  const [convert, setConvert] = useState(!!lead._convert);
   const [name, setName] = useState([lead.first_name, lead.last_name].filter(Boolean).join(" "));
   const [email, setEmail] = useState(lead.email ?? "");
 
@@ -1506,8 +1704,7 @@ function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove, fu, seq
       </dl>
 
       <Intake custom={lead.custom} />
-      {!engagement && <LeadFollowup lead={lead} fu={fu} seq={seq} reload={reload} onConvert={() => setConvert(true)} onLost={onLost} />}
-      <LeadTasks lead={lead} />
+      {!engagement && <LeadTasks lead={lead} fu={fu} reload={reload} />}
       <LeadNda lead={lead} />
       <LeadBuilders lead={lead} reload={reload} />
 
@@ -1595,6 +1792,23 @@ function Engagements() {
 }
 
 // ===================== pages/EngagementDetail.jsx =====================
+/** Follow-up on an engagement that has not been signed yet (they said yes, then went quiet). */
+function EngagementFollowup({ e }) {
+  const [lead, setLead] = useState(null);
+  const [fu, setFu] = useState(null);
+  const load = useCallback(async () => {
+    const [{ data: l }, { data: f }] = await Promise.all([
+      supabase.from("leads_board").select("*").eq("ghl_id", e.opportunity_id).maybeSingle(),
+      supabase.from("followups").select("*").or(`engagement_id.eq.${e.id}${e.opportunity_id ? `,opportunity_id.eq.${e.opportunity_id}` : ""}`).in("status", ["active", "checkin", "quiet"]).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+    ]);
+    setLead(l ?? { ghl_id: e.opportunity_id, name: e.company_name || e.client_name, first_name: (e.client_name || "").split(" ")[0], company: e.company_name, phone: "", email: e.client_email });
+    setFu(f ?? null);
+  }, [e.id, e.opportunity_id, e.company_name, e.client_name, e.client_email]);
+  useEffect(() => { load(); }, [load]);
+  if (!lead) return null;
+  return <Card title="Follow-up"><p className="muted small" style={{ margin: "0 0 10px" }}>Sent a draft and heard nothing? Start the follow-up: a touch every 3 working days, 5 in total. A client who has paid never goes to Lost; after the last touch they go Quiet and come back on your list every 30 days.</p><LeadTasks lead={lead} fu={fu} reload={load} engagement={e} /></Card>;
+}
+
 function EngagementDetail() {
   const { id } = useParams();
   const [e, setE] = useState(null);
@@ -1655,6 +1869,7 @@ function EngagementDetail() {
           <ClientDetails e={e} reload={load} />
           <NotesCard e={e} contact={contact} reload={load} />
           {e.deposit_required ? <DepositCard e={e} deposit={deposit} reload={load} /> : <RequestDepositCard e={e} reload={load} />}
+          {e.opportunity_id && !["engaged", "valuation_active", "completed", "declined"].includes(e.stage) && <EngagementFollowup e={e} />}
           <Invoices invoices={invoices} deposit={deposit} reload={load} />
           <Card title="Activity">
             {feed.length === 0 ? <span className="muted small">Nothing yet.</span> : (
@@ -2346,6 +2561,8 @@ function Settings() {
   return (
     <>
       <div className="pagehead"><div><h1>Settings</h1><p>How Solonos looks and works for you.</p></div></div>
+      <NotificationsCard />
+      <div style={{ height: 18 }} />
       <BoardSettings />
       <div style={{ height: 18 }} />
       <FollowupSettings />
@@ -2363,7 +2580,7 @@ function BoardSettings() {
         supabase.from("pipeline_stages").select("ghl_id,name,position").order("position"),
         supabase.from("app_settings").select("value").eq("key", "leads_board").maybeSingle(),
       ]);
-      const base = [...(st ?? []).map((x) => ({ key: x.ghl_id, title: x.name })), { key: "__ghost1", title: "Ghost · after Call 1" }, { key: "__ghost2", title: "Ghost · after Call 2" }, { key: "__checkin", title: "90-day check-in" }, { key: "__invited", title: "Invited" }, { key: "__engaged", title: "Engaged" }];
+      const base = [...(st ?? []).map((x) => ({ key: x.ghl_id, title: x.name })), { key: "__invited", title: "Invited" }, { key: "__engaged", title: "Engaged" }];
       const layout = saved?.value ?? null, hidden = new Set(layout?.hidden ?? []);
       const ordered = layout ? applyBoardLayout(base, { order: layout.order }) : base;
       setRows(ordered.map((r) => ({ ...r, hidden: hidden.has(r.key) })));
@@ -3222,6 +3439,7 @@ function SetPassword() {
 
 function Shell({ session, staff, signOut }) {
   const [menu, setMenu] = useState(false);
+  useEffect(() => { registerSw(); }, []);
   const loc = useLocation();
   useEffect(() => { setMenu(false); }, [loc.pathname]);
   return (
