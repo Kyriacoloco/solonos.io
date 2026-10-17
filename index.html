@@ -232,7 +232,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.10";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.11";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -846,7 +846,7 @@ async function loadTemplates() { const { data } = await supabase.from("app_setti
 async function saveTemplate(key, tpl) { const cur = await loadTemplates(); const { error } = await supabase.from("app_settings").upsert({ key: "email_templates", value: { ...cur, [key]: tpl }, updated_at: new Date().toISOString() }); if (error) throw new Error(error.message); }
 const DEFAULT_TEMPLATES = {
   nda: { subject: "{company} - Non Disclosure Agreement", text: "Dear {first},\n\nThank you for our call. As discussed, attached is our Mutual Non-Disclosure Agreement so you can share your financial information with full confidentiality.\n\nPlease sign it and send it back by replying to this email. Once we have it, we will send you the next steps.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
-  scorecard: { subject: "It was a pleasure to meet you: your Buyer Discount Scorecard", text: "Dear {first},\n\nIt was a pleasure to meet you today. As promised, attached is your Buyer Discount Scorecard: the twenty points a buyer will look at when they price {company}, so you can see where you stand before anyone else does.\n\nGo through it at your own pace. If you would like, I can walk you through the points that matter most for your business in 15 minutes.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
+  scorecard: { subject: "It was a pleasure to meet you: your Buyer Discount Scorecard", text: "Dear {first},\n\nIt was a pleasure to meet you today. As promised, attached is your Buyer Discount Scorecard: the twenty points a buyer will look at when they price {company}, so you can see where you stand before anyone else does.\n\nGo through it at your own pace. Our proposal with the next steps will follow shortly.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
   builder: { subject: "{company}: your Market Example Range", text: "Hi {first},\n\nThank you for the call today. Attached is the Market Example Range for {company}, built from the figures you gave me on the call.\n\nPlease read it as a market sample, not a valuation: it shows what buyers in your sector are paying today and where {company} would sit on standard assumptions.\n\nIf you would like to go ahead, reply to this email and I will send the engagement letter and the next steps the same day.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
 };
 const fillTpl = (t, v) => String(t ?? "").replace(/\{(\w+)\}/g, (m, k) => (v[k] ?? m));
