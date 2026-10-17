@@ -3,7 +3,7 @@
 //   Run every 5 minutes by Supabase Cron (see PART35_CRON.sql). POST with header x-push-secret: <PUSH_SECRET>.
 //   Secrets: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (mailto:info@consortiaadvisory.com), PUSH_SECRET,
 //            GHL_SYNC_SECRET (to call send-email), DIGEST_EMAIL (optional, default info@consortiaadvisory.com)
-// Version 2.0 (15 Oct 2026): morning digest; the separate 09:00 overdue ping is gone (the digest carries the overdue count).
+// Version 2.1 (17 Oct 2026): { test: true } sends a test digest now. Version 2.0 (15 Oct 2026): morning digest; the separate 09:00 overdue ping is gone (the digest carries the overdue count).
 import { createClient } from "npm:@supabase/supabase-js@2";
 import webpush from "npm:web-push@3.6.7";
 
@@ -21,8 +21,18 @@ Deno.serve(async (req) => {
   const notes: { title: string; body: string; url: string; tag: string }[] = [];
   const out: Record<string, unknown> = { ok: true };
 
+  // ---- test from Solonos / the SQL editor: { "test": true } sends today's digest (or a hello) right now, any day, any time
+  if (body.test) {
+    const { data: d } = await db.rpc("morning_digest");
+    const text = d ? digestText(d) : { title: "Solonos · notifications are working", body: "Nothing due and nothing overdue right now. The real digest comes weekdays at 08:30.", html: "<p>Nothing due and nothing overdue right now. The real digest comes weekdays at 08:30.</p>" };
+    notes.push({ title: text.title, body: text.body, url: "/app/tasks", tag: "digest-test" });
+    try { await sendEmail({ to: Deno.env.get("DIGEST_EMAIL") || "info@consortiaadvisory.com", subject: `[test] ${text.title}`, html: text.html }); out.digest_email = true; }
+    catch (e) { out.digest_email = String(e); }
+    out.test = true;
+  }
+
   // ---- the morning digest (once a day; the database decides whether it is time)
-  if (body.digest !== false) {
+  if (body.digest !== false && !body.test) {
     const { data: d, error } = await db.rpc("morning_digest_due");
     if (error) console.warn("digest", error.message);
     if (d) {
