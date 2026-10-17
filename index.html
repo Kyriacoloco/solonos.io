@@ -232,7 +232,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.9";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.10";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -2641,6 +2641,9 @@ function BoardSettings() {
     })();
   }, []);
   const move = (i, d) => { const j = i + d; if (j < 0 || j >= rows.length) return; const n = [...rows]; [n[i], n[j]] = [n[j], n[i]]; setRows(n); setDirty(true); };
+  const [drag, setDrag] = useState(null);       // index being dragged
+  const [over, setOver] = useState(null);       // index under the pointer
+  const dropAt = (to) => { if (drag == null || to == null || drag === to) { setDrag(null); setOver(null); return; } const n = [...rows]; const [m] = n.splice(drag, 1); n.splice(to, 0, m); setRows(n); setDirty(true); setDrag(null); setOver(null); };
   const toggle = (i) => { const n = [...rows]; n[i] = { ...n[i], hidden: !n[i].hidden }; setRows(n); setDirty(true); };
   const reset = () => { setRows([...rows].sort((a, b) => (a.key.startsWith("__") ? 1 : 0) - (b.key.startsWith("__") ? 1 : 0))); setDirty(true); };
   const save = () => run(async () => {
@@ -2654,11 +2657,18 @@ function BoardSettings() {
     <Card title="Leads board columns" right={<span className="muted small">Changes Solonos only; GHL stays as it is</span>}>
       {!rows ? <span className="muted small">Loading…</span> : (
         <>
-          <p className="muted small" style={{ margin: "0 0 12px" }}>Put the columns in the order you want them, left to right. Untick a column to hide it from the board; its leads stay in GHL and in Reports. Columns with no leads yet only show up once a lead arrives there.</p>
+          <p className="muted small" style={{ margin: "0 0 12px" }}>Drag a row (by the ⠿ handle) to put the columns in the order you want them, left to right. Untick a column to hide it from the board; its leads stay in GHL and in Reports. Columns with no leads yet only show up once a lead arrives there.</p>
           <div className="stack" style={{ gap: 6 }}>
             {rows.map((r, i) => (
-              <div key={r.key} className="row between" style={{ padding: "8px 10px", border: "1px solid var(--border-sub)", borderRadius: 8, background: r.hidden ? "var(--sunken)" : "var(--surface)", flexWrap: "nowrap" }}>
+              <div key={r.key} className="row between" draggable
+                onDragStart={(e) => { setDrag(i); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", r.key); }}
+                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (over !== i) setOver(i); }}
+                onDragLeave={() => { if (over === i) setOver(null); }}
+                onDrop={(e) => { e.preventDefault(); dropAt(i); }}
+                onDragEnd={() => { setDrag(null); setOver(null); }}
+                style={{ padding: "8px 10px", border: `1px solid ${over === i && drag !== i ? "var(--accent)" : "var(--border-sub)"}`, borderTop: over === i && drag != null && drag > i ? "3px solid var(--accent)" : undefined, borderBottom: over === i && drag != null && drag < i ? "3px solid var(--accent)" : undefined, borderRadius: 8, background: r.hidden ? "var(--sunken)" : "var(--surface)", flexWrap: "nowrap", opacity: drag === i ? 0.4 : 1, cursor: "grab" }}>
                 <label className="row" style={{ gap: 10, flexWrap: "nowrap", minWidth: 0 }}>
+                  <span className="muted" style={{ fontSize: 18, lineHeight: 1, cursor: "grab", userSelect: "none" }} title="Drag to reorder">⠿</span>
                   <input type="checkbox" checked={!r.hidden} onChange={() => toggle(i)} />
                   <span style={{ opacity: r.hidden ? 0.5 : 1, fontWeight: 500 }}>{r.title}</span>
                   {r.key.startsWith("__") && <span className="muted small">Solonos</span>}
