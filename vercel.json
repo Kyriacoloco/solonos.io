@@ -1,7 +1,7 @@
 {
   "rewrites": [
     {
-      "source": "/((?!ConsortiaValuationBuilder\\.html$|sw\\.js$|manifest\\.json$|icon-192\\.png$|icon-512\\.png$).*)",
+      "source": "/((?!ConsortiaValuationBuilder\\.html$|Buyer-Discount-Scorecard\\.pdf$|sw\\.js$|manifest\\.json$|icon-192\\.png$|icon-512\\.png$).*)",
       "destination": "/index.html"
     }
   ],

@@ -232,7 +232,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.8";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.9";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -533,6 +533,8 @@ function Leads() {
   const [dueToday, setDueToday] = useState({}); // opportunity_id -> first task due today or overdue
   const [onlyDue, setOnlyDue] = useState(false);
   const [view, setView] = useState(() => { try { return localStorage.getItem("solonos.leadsView") || "list"; } catch (e) { return "list"; } });   // list | board
+  const [q, setQ] = useState("");
+  const toast = useToast();
   const pickView = (v) => { setView(v); try { localStorage.setItem("solonos.leadsView", v); } catch (e) { /* ignore */ } };
   const loc = useLocation();
   useEffect(() => { supabase.from("app_settings").select("value").eq("key", "leads_board").maybeSingle().then(({ data }) => setLayout(data?.value ?? null)); }, []);
@@ -580,11 +582,18 @@ function Leads() {
   const firstWithLeads = Math.min(...stages.filter((st) => inGhl.some((l) => l.stage_id === st.ghl_id)).map((st) => st.position), Infinity);
   const shownStages = stages.filter((st) => st.position >= firstWithLeads);
   const moveTo = (ghlId, stageId) => run(async () => {
+    const lead = leads.find((x) => x.ghl_id === ghlId);
+    const from = stages.find((x) => x.ghl_id === lead?.stage_id), to = stages.find((x) => x.ghl_id === stageId);
     const { data, error } = await supabase.functions.invoke("ghl-sync", { body: { action: "move", opportunity_id: ghlId, stage_id: stageId } });
     if (error) throw new Error((await error.context?.json?.().catch(() => null))?.error ?? error.message);
     if (data?.ok === false) throw new Error(data.error);
+    // Free Call Booked -> Free Call Showed: the Buyer Discount Scorecard goes out by email, same wording for everyone
+    if (lead && /booked/i.test(from?.name ?? "") && /showed/i.test(to?.name ?? "")) {
+      try { await sendScorecard(lead); toast(`Moved in GHL. Scorecard emailed to ${lead.email}`); }
+      catch (e) { toast(`Moved in GHL, but the scorecard email failed: ${e.message}`, "error"); }
+    } else toast("Moved in GHL");
     await load();
-  }, "Moved in GHL");
+  });
   const isLostStage = (st) => /^lost/i.test(st?.name ?? "");
   const dropTo = (id, stageId) => {
     const st = stages.find((x) => x.ghl_id === stageId);
@@ -610,7 +619,8 @@ function Leads() {
     { key: "__invited", title: "Invited", rows: leads.filter((l) => engOf(l) && SENT.includes(engOf(l).stage)) },
     { key: "__engaged", title: "Engaged", rows: leads.filter((l) => engOf(l) && ENGAGED.includes(engOf(l).stage)) },
   ];
-  const cols = applyBoardLayout(allCols, layout).map((c) => (onlyDue ? { ...c, rows: c.rows.filter((l) => dueToday[l.ghl_id]) } : c));
+  const matchesQ = (l) => { const t = q.trim().toLowerCase(); if (!t) return true; const hay = [l.name, l.first_name, l.last_name, l.email, l.phone, l.company, l.stage_name, l.country, l.source, l.lost_reason, engOf(l) ? stageLabel(engOf(l).stage) : "", typeof l.custom === "object" ? JSON.stringify(l.custom) : l.custom].filter(Boolean).join(" ").toLowerCase(); return t.split(/\s+/).every((w) => hay.includes(w)); };
+  const cols = applyBoardLayout(allCols, layout).map((c) => ({ ...c, rows: c.rows.filter((l) => (!onlyDue || dueToday[l.ghl_id]) && matchesQ(l)) }));
   const dueCount = leads.filter((l) => dueToday[l.ghl_id]).length;
   const colNames = cols.map((c) => [c.title, c.rows.length]);
   const goCol = (i) => { const c = boardRef.current?.children[i]; if (c) boardRef.current.scrollTo({ left: c.offsetLeft - boardRef.current.offsetLeft, behavior: "smooth" }); };
@@ -624,7 +634,9 @@ function Leads() {
     <>
       <Head lastSync={lastSync} count={leads.length} reload={load} />
       <div className="row between" style={{ marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
-        <div className="row" style={{ gap: 6 }}>
+        <div className="row" style={{ gap: 6, flex: 1, minWidth: 220 }}>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, company, email, phone, stage…" style={{ flex: 1, maxWidth: 420, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", font: "inherit" }} />
+          {q && <button className="btn" onClick={() => setQ("")}>Clear</button>}
           <button className={`btn${onlyDue ? " primary" : ""}`} onClick={() => setOnlyDue((v) => !v)}>Due today · {dueCount}</button>
           {onlyDue && <span className="muted small hide-sm">Only leads with a touch due today or overdue</span>}
         </div>
@@ -633,7 +645,7 @@ function Leads() {
           <button className={`btn${view === "board" ? " primary" : ""}`} style={{ borderRadius: "0 8px 8px 0" }} onClick={() => pickView("board")}>Board</button>
         </div>
       </div>
-      {view === "list" && <LeadsList rows={onlyDue ? leads.filter((l) => dueToday[l.ghl_id]) : leads} engOf={engOf} onOpen={setOpen} />}
+      {view === "list" && <LeadsList rows={(onlyDue ? leads.filter((l) => dueToday[l.ghl_id]) : leads).filter(matchesQ)} engOf={engOf} onOpen={setOpen} />}
       {view === "board" && <>
       <div className="stagetabs">
         {colNames.map(([n, c], i) => <button key={n} className={i === activeCol ? "on" : ""} onClick={() => goCol(i)}>{n} · {c}</button>)}
@@ -650,6 +662,21 @@ function Leads() {
 }
 
 const LOST_REASONS = ["No reply", "Not selling now", "No-show", "Price", "Chose another firm", "Already has another broker", "Not a fit"];
+
+/** The Buyer Discount Scorecard PDF goes to the lead the moment they move to Free Call Showed. Wording: Settings > Email templates. */
+async function sendScorecard(lead) {
+  if (!lead.email) throw new Error("this lead has no email address");
+  const tpl = (await loadTemplates()).scorecard ?? DEFAULT_TEMPLATES.scorecard;
+  const v = { first: lead.first_name || lead.name.split("|")[0].trim().split(" ")[0], company: lead.company || "your business" };
+  const res = await fetch(`/Buyer-Discount-Scorecard.pdf?v=${APP_VERSION}`);
+  if (!res.ok) throw new Error("the scorecard PDF is missing from the site");
+  const blob = await res.blob();
+  const b64 = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = () => bad(new Error("could not read the PDF")); r.readAsDataURL(blob); });
+  await callFn("send-email", { to: lead.email, subject: fillTpl(tpl.subject, v), html: mailShell(textToHtml(fillTpl(tpl.text, v))), attachment: { filename: "Buyer Discount Scorecard.pdf", contentBase64: b64, contentType: "application/pdf" } });
+  const { data: me } = await supabase.auth.getUser();
+  await supabase.from("lead_notes").insert({ opportunity_id: lead.ghl_id, body: `Buyer Discount Scorecard emailed to ${lead.email}`, author: me?.user?.email ?? "staff" });
+  try { await supabase.functions.invoke("ghl-sync", { body: { action: "note", opportunity_id: lead.ghl_id, body: `Solonos: Buyer Discount Scorecard emailed to ${lead.email}` } }); } catch (e) { /* best effort */ }
+}
 
 const BUCKETS = [["overdue", "Overdue"], ["today", "Due today"], ["none", "No next step"], ["future", "Coming up"], ["parked", "Parked (90-day list / quiet)"], ["closed", "Closed or in engagement"]];
 /** The Leads list: one row per open lead, sorted by what needs doing. Tap a row to open the lead. */
@@ -819,6 +846,7 @@ async function loadTemplates() { const { data } = await supabase.from("app_setti
 async function saveTemplate(key, tpl) { const cur = await loadTemplates(); const { error } = await supabase.from("app_settings").upsert({ key: "email_templates", value: { ...cur, [key]: tpl }, updated_at: new Date().toISOString() }); if (error) throw new Error(error.message); }
 const DEFAULT_TEMPLATES = {
   nda: { subject: "{company} - Non Disclosure Agreement", text: "Dear {first},\n\nThank you for our call. As discussed, attached is our Mutual Non-Disclosure Agreement so you can share your financial information with full confidentiality.\n\nPlease sign it and send it back by replying to this email. Once we have it, we will send you the next steps.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
+  scorecard: { subject: "It was a pleasure to meet you: your Buyer Discount Scorecard", text: "Dear {first},\n\nIt was a pleasure to meet you today. As promised, attached is your Buyer Discount Scorecard: the twenty points a buyer will look at when they price {company}, so you can see where you stand before anyone else does.\n\nGo through it at your own pace. If you would like, I can walk you through the points that matter most for your business in 15 minutes.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
   builder: { subject: "{company}: your Market Example Range", text: "Hi {first},\n\nThank you for the call today. Attached is the Market Example Range for {company}, built from the figures you gave me on the call.\n\nPlease read it as a market sample, not a valuation: it shows what buyers in your sector are paying today and where {company} would sit on standard assumptions.\n\nIf you would like to go ahead, reply to this email and I will send the engagement letter and the next steps the same day.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
 };
 const fillTpl = (t, v) => String(t ?? "").replace(/\{(\w+)\}/g, (m, k) => (v[k] ?? m));
@@ -1278,7 +1306,7 @@ function EmailTemplates() {
   const [run, busy] = useAction();
   const [t, setT] = useState(null);
   const [dirty, setDirty] = useState(false);
-  useEffect(() => { loadTemplates().then((v) => setT({ nda: v.nda ?? DEFAULT_TEMPLATES.nda, builder: v.builder ?? DEFAULT_TEMPLATES.builder })); }, []);
+  useEffect(() => { loadTemplates().then((v) => setT({ scorecard: v.scorecard ?? DEFAULT_TEMPLATES.scorecard, nda: v.nda ?? DEFAULT_TEMPLATES.nda, builder: v.builder ?? DEFAULT_TEMPLATES.builder })); }, []);
   const upd = (k, f, v) => { setT({ ...t, [k]: { ...t[k], [f]: v } }); setDirty(true); };
   const save = () => run(async () => {
     const { error } = await supabase.from("app_settings").upsert({ key: "email_templates", value: t, updated_at: new Date().toISOString() });
@@ -1287,7 +1315,7 @@ function EmailTemplates() {
   if (!t) return null;
   return (
     <Card title="Email templates" right={<span className="muted small">Placeholders: {"{first} {company}"}</span>}>
-      {[["nda", "NDA email (from the lead)"], ["builder", "Valuation email (Send to client)"]].map(([k, label]) => (
+      {[["scorecard", "Scorecard email (sent when a lead moves from Free Call Booked to Free Call Showed)"], ["nda", "NDA email (from the lead)"], ["builder", "Valuation email (Send to client)"]].map(([k, label]) => (
         <div key={k} style={{ marginBottom: 14 }}>
           <h3 style={{ margin: "0 0 6px" }}>{label}</h3>
           <input style={{ width: "100%", marginBottom: 6 }} value={t[k].subject} onChange={(x) => upd(k, "subject", x.target.value)} placeholder="Subject" />
@@ -1526,7 +1554,6 @@ function LeadCard({ l, eng, fu, due, onOpen, draggable }) {
         <span title="Came in">{l.ghl_created_at ? day(l.ghl_created_at) : ago(l.ghl_updated_at)}</span>
       </div>
       <div className="row" style={{ marginTop: 6, gap: 6 }}>
-        {l.country && <Chip>{l.country}</Chip>}
         {l.monetary_value > 0 && <Chip>{eur(l.monetary_value)}</Chip>}
         {l.recordings > 0 && <Chip>Fathom ×{l.recordings}</Chip>}
         {l.builders > 0 && <Chip kind="brand">Builder sent</Chip>}
@@ -1655,6 +1682,14 @@ function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove, fu }) {
   const [convert, setConvert] = useState(!!lead._convert);
   const [name, setName] = useState([lead.first_name, lead.last_name].filter(Boolean).join(" "));
   const [email, setEmail] = useState(lead.email ?? "");
+  const [edit, setEdit] = useState(null);   // { first_name, last_name, email, phone, company } while editing the contact
+  const startEdit = () => setEdit({ first_name: lead.first_name ?? "", last_name: lead.last_name ?? "", email: lead.email ?? "", phone: lead.phone ?? "", company: lead.company ?? "" });
+  const saveEdit = () => run(async () => {
+    const { data, error } = await supabase.functions.invoke("ghl-sync", { body: { action: "contact", opportunity_id: lead.ghl_id, fields: edit } });
+    if (error) throw new Error((await error.context?.json?.().catch(() => null))?.error ?? error.message);
+    if (data?.ok === false) throw new Error(data.error);
+    setEdit(null); setName([edit.first_name, edit.last_name].filter(Boolean).join(" ")); setEmail(edit.email); await reload();
+  }, "Saved here and in GHL");
 
   const loadRecs = useCallback(async () => {
     const { data } = await supabase.from("call_recordings").select("*").eq("opportunity_id", lead.ghl_id).order("call_no");
@@ -1687,8 +1722,23 @@ function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove, fu }) {
           </select>
         </label>
       )}
+      {edit ? (
+        <div className="card" style={{ padding: 12, background: "var(--sunken)", margin: "14px 0" }}>
+          <div className="grid2">
+            <Field label="First name"><input value={edit.first_name} onChange={(e) => setEdit({ ...edit, first_name: e.target.value })} /></Field>
+            <Field label="Last name"><input value={edit.last_name} onChange={(e) => setEdit({ ...edit, last_name: e.target.value })} /></Field>
+            <Field label="Email"><input type="email" value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></Field>
+            <Field label="Phone"><input value={edit.phone} onChange={(e) => setEdit({ ...edit, phone: e.target.value })} placeholder="+357…" /></Field>
+          </div>
+          <Field label="Company"><input value={edit.company} onChange={(e) => setEdit({ ...edit, company: e.target.value })} /></Field>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn primary" disabled={busy} onClick={saveEdit}>Save (updates GHL too)</button>
+            <button className="btn" disabled={busy} onClick={() => setEdit(null)}>Cancel</button>
+          </div>
+        </div>
+      ) : (
       <dl className="kv" style={{ margin: "14px 0" }}>
-        <dt>Contact</dt><dd>{[lead.first_name, lead.last_name].filter(Boolean).join(" ") || "—"}</dd>
+        <dt>Contact</dt><dd>{[lead.first_name, lead.last_name].filter(Boolean).join(" ") || "—"} <button className="btn" style={{ marginLeft: 8, padding: "2px 8px" }} onClick={startEdit}>Edit</button></dd>
         <dt>Company</dt><dd>{lead.company || "—"}</dd>
         <dt>Email</dt><dd>{lead.email || "—"}</dd>
         <dt>Phone</dt><dd>{lead.phone || "—"}</dd>
@@ -1705,6 +1755,7 @@ function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove, fu }) {
         <dt>Owner</dt><dd>{lead.assigned_to || "—"}</dd>
         <dt>Came in</dt><dd>{lead.ghl_created_at ? `${day(lead.ghl_created_at)} (${ago(lead.ghl_created_at)})` : "—"}</dd>
       </dl>
+      )}
 
       <Intake custom={lead.custom} />
       {!engagement && <LeadTasks lead={lead} fu={fu} reload={reload} />}

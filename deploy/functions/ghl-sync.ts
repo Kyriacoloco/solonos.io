@@ -1,4 +1,6 @@
 // ghl-sync — single-file version for the Supabase Dashboard editor (Edge Functions → Deploy a new function → Via Editor).
+// Version 1.4 (17 Oct 2026): action "contact" updates the contact in GHL (name, email, phone, company) from edits made in Solonos.
+//   Needs the "Edit Contacts" (contacts.write) scope on the GHL private integration token.
 // Version 1.1 (18 Sep 2026): also stores the lead's booked call (GHL calendar appointment) on the opportunity. Needs Part 25.
 // Version 1.3 (9 Oct 2026): call times from GHL that carry no timezone are read as Europe/Athens (they were being stored as UTC, showing 3 hours late).
 // Version 1.2 (2 Oct 2026): keeps a no-show as the call status (for the ghost follow-ups), "move" accepts stage_name,
@@ -117,6 +119,11 @@ async function moveOpportunity(id: string, stageId: string): Promise<void> {
   if (!res.ok) throw new Error(`GHL ${res.status} moving opportunity: ${await res.text()}`);
 }
 
+async function updateContact(contactId: string, fields: Record<string, string>): Promise<void> {
+  const res = await fetch(`${BASE}/contacts/${contactId}`, { method: "PUT", headers: { ...headers(), "content-type": "application/json" }, body: JSON.stringify(fields) });
+  if (!res.ok) throw new Error(`GHL ${res.status} updating contact: ${await res.text()}`);
+}
+
 async function addContactNote(contactId: string, body: string): Promise<void> {
   const res = await fetch(`${BASE}/contacts/${contactId}/notes`, { method: "POST", headers: { ...headers(), "content-type": "application/json" }, body: JSON.stringify({ body }) });
   if (!res.ok) throw new Error(`GHL ${res.status} adding note: ${await res.text()}`);
@@ -137,7 +144,7 @@ async function contact(id: string): Promise<GhlContact> {
   const r = await get<{ contact: GhlContact }>(`/contacts/${id}`);
   return r.contact;
 }
-const ghl = { pipelines, searchOpportunities, opportunity, contact, customFields, moveOpportunity, addContactNote };
+const ghl = { pipelines, searchOpportunities, opportunity, contact, customFields, moveOpportunity, addContactNote, updateContact };
 
 
 // ghl-sync — mirrors one GHL pipeline into pipeline_stages / contacts / opportunities.
@@ -338,6 +345,34 @@ Deno.serve(async (req) => {
         return json({ ok: true });
       } catch (e) {
         await db.from("sync_log").insert({ kind: "webhook", event: "note", ok: false, detail: { error: String(e), id: b.opportunity_id } });
+        return json({ ok: false, error: String(e) }, 500);
+      }
+    }
+    // staff edited the contact in Solonos: push name / email / phone / company to GHL, then re-read the contact
+    if (b?.action === "contact") {
+      if (!(await trusted())) return json({ error: "staff only" }, 403);
+      try {
+        let contactId = b.contact_id ? String(b.contact_id) : "";
+        if (!contactId && b.opportunity_id) {
+          const { data } = await db.from("opportunities").select("contact_id").eq("ghl_id", String(b.opportunity_id)).maybeSingle();
+          contactId = data?.contact_id ?? "";
+        }
+        if (!contactId) throw new Error("no contact for this lead");
+        const f = (b.fields ?? {}) as Record<string, string>;
+        const patch: Record<string, string> = {};
+        if (f.first_name != null) patch.firstName = String(f.first_name).trim();
+        if (f.last_name != null) patch.lastName = String(f.last_name).trim();
+        if (f.email != null) patch.email = String(f.email).trim();
+        if (f.phone != null) patch.phone = String(f.phone).trim();
+        if (f.company != null) patch.companyName = String(f.company).trim();
+        await ghl.updateContact(contactId, patch);
+        await upsertContact(db, await ghl.contact(contactId));
+        // the opportunity name in GHL follows the contact name; refresh it too
+        if (b.opportunity_id) { try { await upsertOpportunity(db, await ghl.opportunity(String(b.opportunity_id))); } catch (_) { /* best effort */ } }
+        await db.from("sync_log").insert({ kind: "webhook", event: "contact", ok: true, detail: { id: b.opportunity_id, contact: contactId, fields: Object.keys(patch) } });
+        return json({ ok: true });
+      } catch (e) {
+        await db.from("sync_log").insert({ kind: "webhook", event: "contact", ok: false, detail: { error: String(e), id: b.opportunity_id } });
         return json({ ok: false, error: String(e) }, 500);
       }
     }
