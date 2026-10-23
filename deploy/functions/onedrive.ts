@@ -51,7 +51,7 @@ async function graphToken() {
 }
 async function g(path: string, init: RequestInit = {}) {
   const r = await fetch(path.startsWith("http") ? path : G + path, { ...init, headers: { Authorization: `Bearer ${await graphToken()}`, ...(init.headers ?? {}) } });
-  if (!r.ok) throw new Error(`Microsoft ${r.status} on ${path.split("?")[0]}: ${(await r.text()).slice(0, 300)}`);
+  if (!r.ok) throw new Error(`Microsoft ${r.status} on ${path.split("?")[0]}: ${(await r.text()).slice(0, 1200)}`);
   return r.status === 204 ? null : r.headers.get("content-type")?.includes("json") ? r.json() : r;
 }
 const children = async (drive: string, item: string) => {
@@ -211,8 +211,8 @@ Deno.serve(async (req) => {
           });
         } catch (err) {
           const m = String(err);
-          if (/sharing|external|guest|policy|notAllowed|accessDenied/i.test(m)) throw new Error(`Microsoft refused to share with ${email}: external sharing is off for this library. ${m.slice(0, 200)}`);
-          throw err;
+          const why = (m.match(/"message":"([^"]+)/) ?? [])[1] ?? m.slice(0, 400);
+          throw new Error(`Microsoft refused to share with ${email}: ${why}`);
         }
         const link = (r?.value ?? []).map((p: any) => p.link?.webUrl).find(Boolean);
         items.push({ item: t.item, name: t.name, url: link || t.url, role: t.role, perms: (r?.value ?? []).map((p: any) => p.id).filter(Boolean) });
