@@ -1,4 +1,5 @@
 // engagement-send — staff clicks "Send NDA + deposit" or "Send engagement letter" in Solonos.
+// 23 Oct 2026 (3.16): project_email sends an email you write on a project, to anyone, with the project's files attached.
 // 23 Oct 2026 (Part 39): invoices of any amount with their own description; invoice_pdf / receipt can skip the email (email:false);
 //   invoice_email sends an issued invoice with the text you write; lead_nda also works on an engagement (engagement_id instead of opportunity_id).
 // 15 Oct 2026: lead_nda takes email_subject / email_text written in Solonos; the letter starts the follow-up (Part 35).
@@ -303,7 +304,7 @@ Deno.serve(async (req) => {
   const { data: isStaff } = await me.rpc("is_staff");
   const body = await req.json().catch(() => ({}));
   const { engagement_id, kind, agreement_id, invoice_id } = body;
-  if (!["invite", "nda", "letter", "stamp", "receipt", "invoice_pdf", "invoice_email", "lead_nda"].includes(kind)) return json({ error: "kind must be invite|nda|letter|stamp|receipt|invoice_pdf|invoice_email|lead_nda" }, 400);
+  if (!["invite", "nda", "letter", "stamp", "receipt", "invoice_pdf", "invoice_email", "project_email", "lead_nda"].includes(kind)) return json({ error: "kind must be invite|nda|letter|stamp|receipt|invoice_pdf|invoice_email|project_email|lead_nda" }, 400);
   if (!["stamp", "letter", "nda"].includes(kind) && !isStaff) return json({ error: "staff only" }, 403);
   if (["letter", "nda"].includes(kind) && !isStaff) {   // the client's portal may trigger the automatic NDA / letter for their own engagement
     const { data: mine } = await me.from("engagements").select("id").eq("id", engagement_id).maybeSingle();
@@ -359,6 +360,42 @@ Deno.serve(async (req) => {
       if (cur?.status === "scheduled") await db.rpc("issue_invoice", { p_invoice: invoice_id });   // Invoice 2: number it now
       const out = await renderInvoice(db, invoice_id, body.email !== false);
       return json({ ok: true, pdf_path: out.pdf_path, invoice_no: out.invoice_no, emailed: body.email !== false });
+    }
+
+    // ---- project_email: an email written on the project, to anyone, with files of that project attached
+    if (kind === "project_email") {
+      const { data: limited } = await me.rpc("is_limited_user");
+      if (limited) throw new Error("Only partners and analysts can send emails");
+      const { to, cc, subject, text } = body;
+      if (!String(to || "").trim() || !String(subject || "").trim() || !String(text || "").trim()) throw new Error("To, subject and message are needed");
+      const paths: string[] = Array.isArray(body.files) ? body.files.map(String) : [];
+      const names = new Map<string, string>();
+      if (paths.length) {
+        const [{ data: d1 }, { data: d2 }] = await Promise.all([
+          db.from("documents").select("storage_path, name").eq("engagement_id", engagement_id).in("storage_path", paths),
+          db.from("client_documents").select("storage_path, label").eq("engagement_id", engagement_id).in("storage_path", paths),
+        ]);
+        for (const x of d1 ?? []) names.set(x.storage_path, x.name);
+        for (const x of d2 ?? []) names.set(x.storage_path, x.label);
+        if (paths.some((p) => !names.has(p))) throw new Error("One of the files is not on this project");
+      }
+      const TYPES: Record<string, string> = { pdf: "application/pdf", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", csv: "text/csv", txt: "text/plain" };
+      const atts: { filename: string; contentBase64: string; contentType: string }[] = [];
+      let total = 0;
+      for (const path of paths) {
+        const [bucket, ...rest] = path.split("/");
+        const { data: file, error: fe } = await db.storage.from(bucket).download(rest.join("/"));
+        if (fe || !file) throw new Error(`Could not read ${names.get(path)}`);
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        total += bytes.length;
+        const ext = (path.match(/\.([A-Za-z0-9]+)$/)?.[1] ?? "").toLowerCase();
+        const base = String(names.get(path) || "file").replace(/[\\/:*?"<>|]+/g, "-");
+        atts.push({ filename: ext && !base.toLowerCase().endsWith(`.${ext}`) ? `${base}.${ext}` : base, contentBase64: b64(bytes), contentType: TYPES[ext] ?? "application/octet-stream" });
+      }
+      if (total > 3.2 * 1024 * 1024) throw new Error(`The attachments are ${(total / 1048576).toFixed(1)} MB. Email allows about 3 MB here: send the OneDrive link instead`);
+      await sendEmail({ to: String(to), cc: String(cc || "").trim() || undefined, subject: String(subject), html: shell(textToHtml(String(text))), attachments: atts });
+      await db.from("activity_log").insert({ engagement_id, actor: "staff", action: "email.sent", detail: { to: String(to), cc: String(cc || ""), subject: String(subject), files: paths.map((p) => names.get(p)) }, visible_to_client: false });
+      return json({ ok: true });
     }
 
     // ---- invoice_email: send an issued invoice with the subject and text written in Solonos
