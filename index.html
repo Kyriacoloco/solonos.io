@@ -21,6 +21,10 @@
   --danger: #9A3B1A; --ok: #2F6B3A; --warn: #8A5A00;
 }
 * { box-sizing: border-box; }
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin: 4px 0 18px; overflow-x: auto; }
+.tab { background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 16px; font-weight: 600; color: var(--text-3); cursor: pointer; white-space: nowrap; }
+.tab:hover { color: var(--text); }
+.tab.on { color: var(--brand); border-bottom-color: var(--brand); }
 html, body, #root { margin: 0; height: 100%; }
 body { font: 14px/1.5 Inter, system-ui, sans-serif; color: var(--text); background: var(--bg); }
 a { color: var(--accent); text-decoration: none; }
@@ -232,7 +236,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.16";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.17";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -1971,59 +1975,6 @@ function ProjectTasks({ e }) {
   );
 }
 
-/** Write an email from the project to anyone (client, buyer, adviser) and attach the project's files. Sent only when you press Send. */
-function ProjectEmail({ e }) {
-  const [run, busy] = useAction();
-  const [files, setFiles] = useState([]);
-  const [m, setM] = useState(null);       // { to, cc, subject, text, pick: Set }
-  const [sent, setSent] = useState([]);
-  const load = useCallback(async () => {
-    const [d, c, l] = await Promise.all([
-      supabase.from("documents").select("id, name, storage_path, created_at").eq("engagement_id", e.id).order("created_at", { ascending: false }),
-      supabase.from("client_documents").select("id, label, storage_path, uploaded_at").eq("engagement_id", e.id).not("uploaded_at", "is", null),
-      supabase.from("activity_log").select("id, detail, created_at").eq("engagement_id", e.id).eq("action", "email.sent").order("created_at", { ascending: false }).limit(10),
-    ]);
-    setFiles([...(d.data ?? []).map((x) => ({ path: x.storage_path, name: x.name })), ...(c.data ?? []).map((x) => ({ path: x.storage_path, name: `${x.label} (from client)` }))].filter((x) => x.path));
-    setSent(l.data ?? []);
-  }, [e.id]);
-  useEffect(() => { load(); }, [load]);
-  const start = () => {
-    const first = String(e.client_name || "").trim().split(/\s+/)[0];
-    setM({ to: e.client_email || "", cc: "", subject: `${e.company_name || e.client_name}`, text: `Dear ${first},\n\n\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory`, pick: new Set() });
-  };
-  const flip = (path) => setM((cur) => { const pick = new Set(cur.pick); if (pick.has(path)) pick.delete(path); else pick.add(path); return { ...cur, pick }; });
-  const send = () => run(async () => {
-    await callFn("engagement-send", { kind: "project_email", engagement_id: e.id, to: m.to, cc: m.cc, subject: m.subject, text: m.text, files: [...m.pick] });
-    setM(null); await load();
-  }, "Email sent");
-  return (
-    <Card title="Email" right={!m && <button className="btn" onClick={start}>Write email</button>}>
-      {m ? (
-        <div className="stack" style={{ gap: 10 }}>
-          <div className="grid2">
-            <Field label="To (several: separate with commas)"><input value={m.to} onChange={(x) => setM({ ...m, to: x.target.value })} placeholder="name@company.com" /></Field>
-            <Field label="Cc (optional)"><input value={m.cc} onChange={(x) => setM({ ...m, cc: x.target.value })} /></Field>
-          </div>
-          <Field label="Subject"><input value={m.subject} onChange={(x) => setM({ ...m, subject: x.target.value })} /></Field>
-          <Field label="Message"><textarea rows={9} value={m.text} onChange={(x) => setM({ ...m, text: x.target.value })} /></Field>
-          <div className="stack" style={{ gap: 4 }}>
-            <span className="small" style={{ color: "var(--text-3)" }}>Attach files from this project</span>
-            {files.length === 0 && <span className="muted small">No files on the project yet.</span>}
-            {files.map((f) => <label key={f.path} className="check small"><input type="checkbox" checked={m.pick.has(f.path)} onChange={() => flip(f.path)} />{f.name}</label>)}
-            <span className="muted small">Up to about 3 MB in total. For bigger files, put the OneDrive link in the message instead.</span>
-          </div>
-          <div className="row">
-            <button className="btn primary" disabled={busy || !m.to.trim() || !m.subject.trim() || !m.text.trim()} onClick={send}>Send from info@</button>
-            <button className="btn" onClick={() => setM(null)}>Cancel</button>
-          </div>
-        </div>
-      ) : sent.length === 0 ? <span className="muted small">Nothing sent from this project yet. Emails go only when you press Send.</span> : (
-        <ul className="feed">{sent.map((x) => <li key={x.id}><span className="when">{ago(x.created_at)}</span><span>{x.detail?.subject} · to {x.detail?.to}{x.detail?.files?.length ? ` · ${x.detail.files.length} file${x.detail.files.length === 1 ? "" : "s"}` : ""}</span></li>)}</ul>
-      )}
-    </Card>
-  );
-}
-
 /** Status for projects that are not valuations (valuations keep their own stages). */
 function ProjectStatus({ e, reload }) {
   const [run, busy] = useAction();
@@ -2193,127 +2144,254 @@ function EngagementDetail() {
 
   if (!e) return null;
   if (isSimple(e)) return <SimpleEngagement e={e} invoices={invoices} feed={feed} contact={contact} reload={load} />;
-  const idx = stageIndex(e.stage);
-  const st = ENGAGEMENT_STAGES[idx];
+  return <ValuationProject e={e} deposit={deposit} invoices={invoices} docs={docs} agreements={agreements} feed={feed} contact={contact} reload={load} />;
+}
+
+/** A valuation: the same header and tabs, with the client page steps under Engagement. */
+function ValuationProject({ e, deposit, invoices, docs, agreements, feed, contact, reload }) {
+  const [tab, setTab] = useProjectTab();
+  const st = ENGAGEMENT_STAGES[stageIndex(e.stage)];
   const canDecline = !["engaged", "valuation_active", "completed", "declined"].includes(e.stage);
-
   return (
     <>
-      <div className="pagehead">
-        <div>
-          <div className="muted small"><Link to="/app/projects">Projects</Link> / {e.company_name || e.client_name}</div>
-          <h1>{e.company_name || e.client_name}</h1>
-          <p>{e.client_name}{e.client_title ? `, ${e.client_title}` : ""} · {e.client_email}</p>
+      <ProjectHead e={e} contact={contact} right={<>
+        <a className="btn" href={`${PORTAL_URL}?as=${e.id}`} target="_blank" rel="noreferrer">Preview client's page</a>
+        <Chip kind={e.stage === "declined" ? "danger" : e.stage === "completed" ? "ok" : "brand"}>{stageLabel(e.stage)}</Chip>
+      </>} />
+      <ProjectTabs tab={tab} setTab={setTab} e={e} />
+      {tab === "overview" && (
+        <div className="grid2">
+          <div className="stack" style={{ gap: 16 }}>
+            <NextStep e={e} st={st} deposit={deposit} docs={docs} invoices={invoices} agreements={agreements} reload={reload} />
+            <ProjectTasks e={e} />
+            <QuickNotes e={e} />
+          </div>
+          <div className="stack" style={{ gap: 16 }}>
+            <ClientDetails e={e} reload={reload} />
+            {e.opportunity_id && !["engaged", "valuation_active", "completed", "declined"].includes(e.stage) && <EngagementFollowup e={e} />}
+            <ActivityCard e={e} feed={feed} />
+          </div>
         </div>
-        <div className="row">
-          <a className="btn" href={`${PORTAL_URL}?as=${e.id}`} target="_blank" rel="noreferrer">Preview client's page</a>
-          <Chip kind={e.stage === "declined" ? "danger" : e.stage === "completed" ? "ok" : "brand"}>{stageLabel(e.stage)}</Chip>
-        </div>
-      </div>
-
-      <Stepper stage={e.stage} />
-
-      <div className="grid2" style={{ marginTop: 18 }}>
-        <div className="stack" style={{ gap: 16 }}>
-          <NextStep e={e} st={st} deposit={deposit} docs={docs} invoices={invoices} agreements={agreements} reload={load} />
-          <ProjectTasks e={e} />
-          <ProjectEmail e={e} />
-          {!["declined"].includes(e.stage) && <LetterCard e={e} reload={load} agreements={agreements} />}
-          <Checklist e={e} docs={docs} reload={load} />
-          <ShareDocCard e={e} docs={docs} reload={load} />
-          {canDecline && <DeclineBox e={e} reload={load} />}
-        </div>
-        <div className="stack" style={{ gap: 16 }}>
-          <ClientDetails e={e} reload={load} />
-          <OneDriveCard e={e} reload={load} />
-          <NotesCard e={e} contact={contact} reload={load} />
-          {e.deposit_required ? <DepositCard e={e} deposit={deposit} reload={load} /> : <RequestDepositCard e={e} reload={load} />}
-          {e.opportunity_id && !["engaged", "valuation_active", "completed", "declined"].includes(e.stage) && <EngagementFollowup e={e} />}
-          <Invoices invoices={invoices} deposit={deposit} reload={load} />
-          <Card title="Activity">
-            {feed.length === 0 ? <span className="muted small">Nothing yet.</span> : (
-              <ul className="feed">
-                {feed.map((f) => (
-                  <li key={f.id}><span className="when">{ago(f.created_at)}</span><span>{describe(f, e.client_name)}</span></li>
-                ))}
-              </ul>
-            )}
-          </Card>
-        </div>
-      </div>
-    </>
-  );
-}
-
-/** Any project that is not a valuation: email, tasks, files, NDA, invoices, notes. Nothing goes to anyone unless you press a send button. */
-function SimpleEngagement({ e, invoices, feed, contact, reload }) {
-  return (
-    <>
-      <div className="pagehead">
-        <div>
-          <div className="muted small"><Link to="/app/projects">Projects</Link> / {e.company_name || e.client_name}</div>
-          <h1>{e.company_name || e.client_name}</h1>
-          <p>{typeLabel(e.engagement_type)} · {e.client_name}{e.client_email ? ` · ${e.client_email}` : ""}</p>
-        </div>
-        <div className="row"><ProjectStatus e={e} reload={reload} /></div>
-      </div>
-      <div className="grid2">
-        <div className="stack" style={{ gap: 16 }}>
-          <ProjectEmail e={e} />
-          <ProjectTasks e={e} />
-          <Card title="Documents">
-            <div className="stack" style={{ gap: 18 }}>
-              <EngagementFiles e={e} bare />
-              <div style={{ borderTop: "1px solid var(--border-sub)", paddingTop: 12 }}><h3 style={{ margin: "0 0 8px" }}>NDA</h3><NdaMaker engagement={e} /></div>
-              <div style={{ borderTop: "1px solid var(--border-sub)", paddingTop: 12 }}><SimpleInvoices e={e} invoices={invoices} reload={reload} bare /></div>
+      )}
+      {tab === "onedrive" && <ProjectOneDrive e={e} reload={reload} />}
+      {tab === "engagement" && (
+        <>
+          <Stepper stage={e.stage} />
+          <div className="grid2" style={{ marginTop: 18 }}>
+            <div className="stack" style={{ gap: 16 }}>
+              {!["declined"].includes(e.stage) && <LetterCard e={e} reload={reload} agreements={agreements} />}
+              <Checklist e={e} docs={docs} reload={reload} />
+              <ShareDocCard e={e} docs={docs} reload={reload} />
+              {canDecline && <DeclineBox e={e} reload={reload} />}
             </div>
-          </Card>
+            <div className="stack" style={{ gap: 16 }}><NotesCard e={e} contact={contact} reload={reload} /></div>
+          </div>
+        </>
+      )}
+      {tab === "invoicing" && (
+        <div className="stack" style={{ gap: 16, maxWidth: 900 }}>
+          <InvoiceSummary invoices={invoices} />
+          {e.deposit_required ? <DepositCard e={e} deposit={deposit} reload={reload} /> : <RequestDepositCard e={e} reload={reload} />}
+          <Invoices invoices={invoices} deposit={deposit} reload={reload} />
         </div>
-        <div className="stack" style={{ gap: 16 }}>
-          <ClientDetails e={e} reload={reload} />
-          <OneDriveCard e={e} reload={reload} />
-          <NotesCard e={e} contact={contact} reload={reload} />
-          <Card title="Activity">
-            {feed.length === 0 ? <span className="muted small">Nothing yet.</span> : (
-              <ul className="feed">{feed.map((f) => <li key={f.id}><span className="when">{ago(f.created_at)}</span><span>{describe(f, e.client_name)}</span></li>)}</ul>
-            )}
-          </Card>
-        </div>
-      </div>
+      )}
     </>
   );
 }
 
-/** Files kept on the engagement (internal; they also go to the OneDrive folder on the next sync). */
-function EngagementFiles({ e, bare }) {
+
+// ===================== project page: header + 4 tabs =====================
+const PROJECT_TABS = [["overview", "Overview"], ["onedrive", "OneDrive"], ["engagement", "Engagement"], ["invoicing", "Invoicing"]];
+/** The open tab lives in the address (?tab=...), so a refresh or a shared link opens the same tab. */
+function useProjectTab() {
+  const loc = useLocation();
+  const nav = useNavigate();
+  const t = new URLSearchParams(loc.search).get("tab");
+  const tab = PROJECT_TABS.some(([k]) => k === t) ? t : "overview";
+  return [tab, (k) => nav({ search: k === "overview" ? "" : `?tab=${k}` }, { replace: true })];
+}
+function ProjectTabs({ tab, setTab, e }) {
+  return (
+    <div className="tabs">
+      {PROJECT_TABS.map(([k, l]) => <button key={k} className={`tab${tab === k ? " on" : ""}`} onClick={() => setTab(k)}>{l}{k === "onedrive" && !e.onedrive_folder_id ? " ·" : ""}</button>)}
+    </div>
+  );
+}
+function ProjectHead({ e, contact, right }) {
+  return (
+    <div className="pagehead">
+      <div>
+        <div className="muted small"><Link to="/app/projects">Projects</Link> / {e.company_name || e.client_name}</div>
+        <h1>{e.company_name || e.client_name}</h1>
+        <p>{[typeLabel(e.engagement_type), e.client_name, e.client_email, contact?.phone].filter(Boolean).join(" · ")}</p>
+      </div>
+      <div className="row">{right}</div>
+    </div>
+  );
+}
+
+/** Free-text notes on the project, saved as you type. */
+function QuickNotes({ e }) {
+  const [text, setText] = useState(e.staff_notes ?? "");
+  const [state, setState] = useState("");
+  const timer = useRef(null);
+  const change = (v) => {
+    setText(v); setState("…");
+    clearTimeout(timer.current);
+    timer.current = setTimeout(async () => {
+      const { error } = await supabase.from("engagements").update({ staff_notes: v }).eq("id", e.id);
+      setState(error ? `Not saved: ${error.message}` : "Saved");
+    }, 800);
+  };
+  useEffect(() => () => clearTimeout(timer.current), []);
+  return (
+    <Card title="Notes" right={<span className="muted small">{state}</span>}>
+      <textarea rows={8} style={{ width: "100%" }} value={text} onChange={(x) => change(x.target.value)} placeholder="Scope, who to speak to, what is missing…" />
+    </Card>
+  );
+}
+
+function ActivityCard({ e, feed }) {
+  return (
+    <Card title="Activity">
+      {feed.length === 0 ? <span className="muted small">Nothing yet.</span> : (
+        <ul className="feed">{feed.map((f) => <li key={f.id}><span className="when">{ago(f.created_at)}</span><span>{describe(f, e.client_name)}</span></li>)}</ul>
+      )}
+    </Card>
+  );
+}
+
+/** Invoiced / paid / owed, per currency. */
+function InvoiceSummary({ invoices }) {
+  const live = invoices.filter((i) => ["issued", "paid"].includes(i.status));
+  const ccys = [...new Set(live.map((i) => i.currency || "EUR"))];
+  if (!ccys.length) return null;
+  const box = (label, v, ccy, color) => <div style={{ flex: 1, minWidth: 120 }}><div className="muted small">{label}</div><div style={{ font: "600 22px Newsreader, serif", color }}>{money(v, ccy)}</div></div>;
+  return (
+    <Card>
+      {ccys.map((c) => {
+        const mine = live.filter((i) => (i.currency || "EUR") === c);
+        const inv = mine.reduce((t, i) => t + Number(i.amount || 0), 0), paid = mine.filter((i) => i.status === "paid").reduce((t, i) => t + Number(i.amount || 0), 0);
+        return <div key={c} className="row wrap" style={{ gap: 16 }}>{box("Invoiced", inv, c)}{box("Paid", paid, c, "var(--ok)")}{box("Owed", inv - paid, c, inv - paid > 0 ? "var(--warn)" : undefined)}</div>;
+      })}
+    </Card>
+  );
+}
+
+/** The project's OneDrive folder, live: click a folder to go in, a file to open it in OneDrive, upload, new folder. */
+function ProjectOneDrive({ e, reload }) {
   const [run, busy] = useAction();
-  const [rows, setRows] = useState([]);
+  const toast = useToast();
+  const start = e.onedrive_folder_id ? { drive: e.onedrive_drive_id, id: e.onedrive_folder_id, name: String(e.onedrive_path || "").split(" / ").pop() || "Project folder", url: e.onedrive_url } : null;
+  const [trail, setTrail] = useState(start ? [start] : []);
+  const [items, setItems] = useState(null);
+  const [newName, setNewName] = useState(null);
+  const here = trail[trail.length - 1];
+  const go = (t) => run(async () => { const r = await callFn("onedrive", { action: "browse", engagement_id: e.id, drive: t[t.length - 1].drive, item: t[t.length - 1].id }); setTrail(t); setItems(r.items); });
+  useEffect(() => { if (start) go([start]); }, [e.onedrive_folder_id]);  // eslint-disable-line react-hooks/exhaustive-deps
+  if (!start) return <OneDriveCard e={e} reload={reload} />;
+  const openItem = (it) => (it.folder ? go([...trail, { drive: it.drive, id: it.id, name: it.name, url: it.url }]) : window.open(it.url, "_blank", "noopener"));
+  const mkdir = () => run(async () => { await callFn("onedrive", { action: "mkdir", engagement_id: e.id, drive: here.drive, item: here.id, name: newName }); setNewName(null); await go(trail); }, "Folder created");
+  const upload = (files) => run(async () => {
+    for (const f of files) {
+      if (f.size > 25 * 1048576) throw new Error(`${f.name} is over 25 MB: drop it into OneDrive directly`);
+      const b64 = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = () => bad(new Error("could not read the file")); r.readAsDataURL(f); });
+      await callFn("onedrive", { action: "upload", engagement_id: e.id, drive: here.drive, item: here.id, name: f.name, contentBase64: b64 });
+    }
+    await go(trail);
+  }, files.length === 1 ? "Uploaded to OneDrive" : `${files.length} files uploaded to OneDrive`);
+  const sync = () => run(async () => { const r = await callFn("onedrive", { action: "sync", engagement_id: e.id }); toast(`Synced: ${r.uploaded ?? 0} to OneDrive, ${r.downloaded ?? 0} to Solonos`); await go(trail); });
+  return (
+    <Card title={<span>{e.onedrive_path || "OneDrive"}</span>} right={<span className="row"><button className="btn" disabled={busy} onClick={sync} title="Solonos copies NDAs, letters and invoices here by itself every 15 minutes">Sync now</button><a className="btn" href={here?.url || e.onedrive_url} target="_blank" rel="noreferrer">Open in OneDrive</a></span>}>
+      <div className="row wrap" style={{ gap: 6, marginBottom: 10 }}>
+        {trail.map((t, i) => <React.Fragment key={t.id}>{i > 0 && <span className="muted">›</span>}<button className="btn" onClick={() => go(trail.slice(0, i + 1))}>{t.name}</button></React.Fragment>)}
+        <span style={{ marginLeft: "auto" }} className="row">
+          {newName === null ? <button className="btn" onClick={() => setNewName("")}>New folder</button> : <><input autoFocus value={newName} onChange={(x) => setNewName(x.target.value)} onKeyDown={(x) => x.key === "Enter" && newName.trim() && mkdir()} placeholder="Folder name" /><button className="btn primary" disabled={busy || !newName.trim()} onClick={mkdir}>Create</button><button className="btn" onClick={() => setNewName(null)}>Cancel</button></>}
+          <label className="btn" style={{ cursor: "pointer" }}>Upload<input type="file" multiple style={{ display: "none" }} onChange={(x) => { const fs = [...(x.target.files ?? [])]; x.target.value = ""; if (fs.length) upload(fs); }} /></label>
+        </span>
+      </div>
+      <div onDragOver={(x) => x.preventDefault()} onDrop={(x) => { x.preventDefault(); const fs = [...(x.dataTransfer.files ?? [])]; if (fs.length) upload(fs); }}>
+        {items === null ? <span className="muted small">{busy ? "Opening the folder…" : "Could not open the folder."}</span> : items.length === 0 ? <Empty title="Empty folder">Drop files here to upload them.</Empty> : (
+          <div className="stack" style={{ gap: 4, opacity: busy ? .6 : 1 }}>
+            {items.map((it) => (
+              <div key={it.id} className="leadrow" onClick={() => openItem(it)} title={it.folder ? "Open folder" : "Open in OneDrive"}>
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileIcon(it)} <span style={{ fontWeight: it.folder ? 600 : 500 }}>{it.name}</span></span>
+                <span className="muted small" style={{ flex: "none" }}>{it.folder ? `${it.count ?? ""} item${it.count === 1 ? "" : "s"}` : fileSize(it.size)}{it.modified ? ` · ${day(it.modified)}` : ""}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="muted small" style={{ marginTop: 10 }}>Drag files from your computer onto this list to upload them. NDAs, letters and invoices made in Solonos land in this folder by themselves.</p>
+      </div>
+    </Card>
+  );
+}
+
+/** Engagement letter for projects that are not valuations: write it in Word, upload it, email it, upload the signed copy. */
+function LetterSlot({ e }) {
+  const [run, busy] = useAction();
+  const [docs, setDocs] = useState([]);
+  const [mail, setMail] = useState(null);
   const load = useCallback(async () => {
-    const { data } = await supabase.from("documents").select("id, name, kind, storage_path, created_at").eq("engagement_id", e.id).not("kind", "in", "(nda,invoice)").order("created_at", { ascending: false });
-    setRows(data ?? []);
+    const { data } = await supabase.from("documents").select("*").eq("engagement_id", e.id).eq("kind", "engagement_letter").order("created_at", { ascending: false });
+    setDocs(data ?? []);
   }, [e.id]);
   useEffect(() => { load(); }, [load]);
-  const open = async (path) => window.open(await signedUrl(path), "_blank");
-  const upload = (files) => run(async () => {
-    for (const file of [...files]) {
-      if (file.size > 50 * 1024 * 1024) throw new Error(`${file.name} is over 50 MB`);
-      const path = `${e.id}/${Date.now()}-${file.name}`;
-      const { error } = await supabase.storage.from("deliverables").upload(path, file);
-      if (error) throw new Error(error.message);
-      const { error: e2 } = await supabase.from("documents").insert({ engagement_id: e.id, kind: "other", name: file.name.replace(/\.[^.]+$/, ""), storage_path: `deliverables/${path}`, visibility: "internal", uploaded_by: "staff" });
-      if (e2) throw new Error(e2.message);
-    }
+  const who = e.company_name || e.client_name;
+  const up = (file, signed) => { if (!file) return; run(async () => {
+    const name = `${who} - Engagement Letter${signed ? " - signed" : ""}`;
+    const ext = (file.name.match(/\.[A-Za-z0-9]+$/) || [".pdf"])[0];
+    const path = `${e.id}/${Date.now()}-${name.replace(/[^A-Za-z0-9.]+/g, "-")}${ext}`;
+    const { error } = await supabase.storage.from("deliverables").upload(path, file);
+    if (error) throw new Error(error.message);
+    const { error: e2 } = await supabase.from("documents").insert({ engagement_id: e.id, kind: "engagement_letter", name, storage_path: `deliverables/${path}`, visibility: "internal", uploaded_by: "staff", meta: { signed, signed_on: signed ? new Date().toISOString().slice(0, 10) : null } });
+    if (e2) throw new Error(e2.message);
     await load();
-  }, "Saved");
+  }, signed ? "Signed letter saved" : "Letter saved. Nothing was emailed"); };
+  const open = async (d) => window.open(await signedUrl(d.storage_path), "_blank");
+  const write = (d) => { const first = String(e.client_name || "").trim().split(/\s+/)[0]; setMail({ d, to: e.client_email || "", subject: d.name, text: `Dear ${first},\n\nPlease find attached our engagement letter. Please sign it and send it back by replying to this email.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory` }); };
+  const send = (m) => run(async () => { await callFn("engagement-send", { kind: "project_email", engagement_id: e.id, to: m.to, subject: m.subject, text: m.text, files: [mail.d.storage_path] }); setMail(null); }, "Letter emailed");
+  const signed = docs.some((d) => d.meta?.signed);
+  const pick = (label, isSigned) => <label className="btn" style={{ cursor: "pointer" }}>{label}<input type="file" accept=".pdf,.doc,.docx" style={{ display: "none" }} onChange={(x) => { up(x.target.files?.[0], isSigned); x.target.value = ""; }} /></label>;
   return (
-    <Section bare={bare} title="Files">
+    <Card title="Engagement letter" right={signed ? <Chip kind="ok">Signed</Chip> : null}>
       <div className="stack" style={{ gap: 6 }}>
-        {rows.length === 0 && <span className="muted small">No files yet.</span>}
-        {rows.map((d) => <div key={d.id} className="row between small"><span>{d.name}<div className="muted">{ago(d.created_at)}</div></span><button className="btn" onClick={() => open(d.storage_path)}>Open</button></div>)}
-        <DropZone busy={busy} onFiles={upload} label="Drop files here or click to choose" />
-        <span className="muted small">Kept inside Solonos (and OneDrive after a sync). Tick them in Email to send them.</span>
+        {docs.length === 0 && <span className="muted small">No letter yet. Write it in Word, upload it here, then email it.</span>}
+        {docs.map((d) => (
+          <div key={d.id} className="row between small">
+            <span>{d.name}{d.meta?.signed ? <span style={{ color: "var(--ok)" }}> ✓</span> : null}<div className="muted">{ago(d.created_at)}</div></span>
+            <span className="row">{!d.meta?.signed && <button className="btn" disabled={busy} onClick={() => write(d)}>Email…</button>}<button className="btn" onClick={() => open(d)}>Open</button></span>
+          </div>
+        ))}
+        {!signed && <div className="row" style={{ marginTop: 6 }}>{pick(docs.length ? "Upload a new version" : "Upload letter", false)}{docs.length > 0 && pick("Upload signed copy", true)}</div>}
       </div>
-    </Section>
+      {mail && <EmailDialog title="Email the engagement letter" to={mail.to} subject={mail.subject} text={mail.text} attached={`${mail.d.name}`} busy={busy} onSend={send} onCancel={() => setMail(null)} />}
+    </Card>
+  );
+}
+
+/** Any project that is not a valuation. Nothing goes to anyone unless you press a send button. */
+function SimpleEngagement({ e, invoices, feed, contact, reload }) {
+  const [tab, setTab] = useProjectTab();
+  return (
+    <>
+      <ProjectHead e={e} contact={contact} right={<ProjectStatus e={e} reload={reload} />} />
+      <ProjectTabs tab={tab} setTab={setTab} e={e} />
+      {tab === "overview" && (
+        <div className="grid2">
+          <div className="stack" style={{ gap: 16 }}><ProjectTasks e={e} /><QuickNotes e={e} /></div>
+          <div className="stack" style={{ gap: 16 }}><ClientDetails e={e} reload={reload} /><ActivityCard e={e} feed={feed} /></div>
+        </div>
+      )}
+      {tab === "onedrive" && <ProjectOneDrive e={e} reload={reload} />}
+      {tab === "engagement" && (
+        <div className="grid2">
+          <div className="stack" style={{ gap: 16 }}><Card title="NDA"><NdaMaker engagement={e} /></Card><LetterSlot e={e} /></div>
+          <div className="stack" style={{ gap: 16 }}>{e.opportunity_id && <NotesCard e={e} contact={contact} reload={reload} />}</div>
+        </div>
+      )}
+      {tab === "invoicing" && <div className="stack" style={{ gap: 16, maxWidth: 900 }}><InvoiceSummary invoices={invoices} /><SimpleInvoices e={e} invoices={invoices} reload={reload} /></div>}
+    </>
   );
 }
 
