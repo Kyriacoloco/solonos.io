@@ -232,7 +232,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.15";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.16";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -272,9 +272,8 @@ const ENG_TYPES = [["valuation", "Business Valuation"], ["sell_side", "Sell-side
 const typeLabel = (t) => ENG_TYPES.find(([k]) => k === (t || "valuation"))?.[1] ?? "Other";
 const isSimple = (e) => (e?.engagement_type || "valuation") !== "valuation";
 /** Stage shown for an engagement: valuations use the funnel stages; simple engagements are Open, Project active, Completed or Declined. */
-const engStageLabel = (e) => !isSimple(e) ? stageLabel(e.stage) : e.stage === "valuation_active" ? "Project active" : ["completed", "declined"].includes(e.stage) ? stageLabel(e.stage) : "Open";
-const PROJECT_STAGES = [["data_topup", "Information"], ["draft", "Working on it"], ["internal_review", "Internal review"], ["client_review", "With the client"], ["final", "Final"], ["closed", "Closed"]];
-const projectStageLabel = (k) => PROJECT_STAGES.find(([x]) => x === k)?.[1] ?? k;
+const engStageLabel = (e) => !isSimple(e) ? stageLabel(e.stage) : e.stage === "valuation_active" ? "In progress" : e.stage === "completed" ? "Completed" : e.stage === "declined" ? "Did not go ahead" : "Open";
+
 const PORTAL_URL = window.location.origin + "/portal";
 
 const eur = (n) => new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(Number(n || 0));
@@ -384,6 +383,12 @@ function Chip({ kind, children, title }) {
 
 function Empty({ title, children }) {
   return <div className="empty"><strong>{title}</strong>{children}</div>;
+}
+
+/** A Card, or (bare) a titled block inside another card. */
+function Section({ bare, title, right, children }) {
+  if (!bare) return <Card title={title} right={right}>{children}</Card>;
+  return <div style={{ paddingTop: 4 }}><div className="row between" style={{ marginBottom: 8 }}><h3 style={{ margin: 0 }}>{title}</h3>{right}</div>{children}</div>;
 }
 
 function Card({ title, right, children, style }) {
@@ -907,7 +912,7 @@ function TaskRow({ t, seq, reload, compact }) {
   const subject = fuFill(t.subject ?? "", t, extra, seq, t.followup_kind);
   const needs = [...String(t.message ?? "").matchAll(/\{(concern|point)\}/g)].map((m) => m[1]);
   const n = daysFromToday(t.due_on);
-  const link = t.opportunity_id ? `/app/leads?open=${encodeURIComponent(t.opportunity_id)}` : t.engagement_id ? `/app/engagements/${t.engagement_id}` : null;
+  const link = t.opportunity_id ? `/app/leads?open=${encodeURIComponent(t.opportunity_id)}` : t.engagement_id ? `/app/projects/${t.engagement_id}` : null;
   const digits = digitsOf(t.phone);
   const wa = (x) => `https://wa.me/${digits}?text=${encodeURIComponent(x)}`;
   const ghlNote = async (body) => { if (!t.opportunity_id) return; try { await supabase.functions.invoke("ghl-sync", { body: { action: "note", opportunity_id: t.opportunity_id, body } }); } catch (e) { /* best effort */ } };
@@ -944,7 +949,7 @@ function TaskRow({ t, seq, reload, compact }) {
           {digits && t.kind === "call" && isTouch && !chans.includes("whatsapp") && <a className="btn" href={`https://wa.me/${digits}`} target="_blank" rel="noreferrer">WhatsApp</a>}
           {t.email && t.kind === "email" && isTouch && <button className="btn" disabled={busy} onClick={sendMail}>Send email</button>}
           {t.email && !isTouch && t.kind === "email" && <a className="btn" href={`mailto:${t.email}`}>Email</a>}
-          {chans.includes("letter") && link && <NavLink className="btn" to={link + "&convert=1"}>Convert + letter</NavLink>}
+          {chans.includes("letter") && link && <NavLink className="btn" to={link + "&convert=1"}>Create project + letter</NavLink>}
           {link && <NavLink className="btn" to={link}>Open</NavLink>}
           <button className="btn primary" disabled={busy} onClick={() => isTouch ? setAsk((a) => !a) : finish("done")}>Done</button>
         </div>
@@ -1068,7 +1073,7 @@ const actionWord = (t) => { const ch = String(t.channel ?? ""); if (t.channel ==
 /** One line per person: time · action · name. Tap opens the lead. */
 function TaskLine({ t }) {
   const n = daysFromToday(t.due_on);
-  const link = t.opportunity_id ? `/app/leads?open=${encodeURIComponent(t.opportunity_id)}` : t.engagement_id ? `/app/engagements/${t.engagement_id}` : "/app/tasks";
+  const link = t.opportunity_id ? `/app/leads?open=${encodeURIComponent(t.opportunity_id)}` : t.engagement_id ? `/app/projects/${t.engagement_id}` : "/app/tasks";
   const who = t.who ? t.who.split("|")[0].trim() : "General";
   return (
     <NavLink to={link} className="row" style={{ gap: 12, padding: "9px 12px", borderRadius: 8, background: "var(--surface)", border: "1px solid var(--border-sub)", borderLeft: `4px solid ${n < 0 ? "var(--danger)" : n === 0 ? "var(--accent)" : "var(--border)"}`, textDecoration: "none", color: "inherit", flexWrap: "nowrap" }}>
@@ -1628,13 +1633,13 @@ function ConvertForm({ lead, onCancel }) {
         await rpc("staff_record_nda_offline", { p_engagement: e.id, p_signed_pdf_path: signedNda.storage_path, p_signed_on: signedNda.meta.signed_on || new Date().toISOString().slice(0, 10) });
         if (ndaMeta?.address && (f.company_country || f.is_individual)) await rpc("staff_confirm_details", { p_engagement: e.id }).catch(() => null);
       }
-      nav(`/app/engagements/${e.id}`);
+      nav(`/app/projects/${e.id}`);
     });
   }
   const ready = f.client_name && f.client_email;
   return (
     <div className="stack">
-      <h3>Convert to engagement</h3>
+      <h3>Create project</h3>
       <p className="muted small" style={{ margin: 0 }}>Only the name and email are needed. The client completes the company details on their own page; everything else follows from that.</p>
       <Field label="Type"><select value={f.type} onChange={set("type")}>{ENG_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
       {ndaDocs.some((d) => d.meta?.signed) && <div className="note small" style={{ color: "var(--ok)" }}>✓ Signed NDA on this lead: the engagement starts with the NDA signed and the details confirmed.</div>}
@@ -1657,7 +1662,7 @@ function ConvertForm({ lead, onCancel }) {
       </div>
       <div className="note">Invoiced by: <strong>{f.company_country ? entityFor(f.company_country) : "decided by the country the client confirms"}</strong>. The engagement letter is generated with this fee once the client confirms details and signs the NDA.</div>
       <div className="row">
-        <button className="btn primary" disabled={!ready || busy} onClick={create}>Create engagement</button>
+        <button className="btn primary" disabled={!ready || busy} onClick={create}>Create project</button>
         <button className="btn" onClick={onCancel}>Cancel</button>
       </div>
     </div>
@@ -1725,7 +1730,7 @@ function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove, fu }) {
   async function doConvert() {
     await run(async () => {
       const e = await rpc("staff_create_engagement", { p_opportunity: lead.ghl_id, p_client_name: name, p_client_email: email });
-      nav(`/app/engagements/${e.id}`);
+      nav(`/app/projects/${e.id}`);
     });
   }
 
@@ -1794,12 +1799,12 @@ function LeadDrawer({ lead, engagement, onClose, reload, stages, onMove, fu }) {
 
       {engagement ? (
         <div className="note">
-          This lead already has an engagement. <button className="btn link" onClick={() => nav(`/app/engagements/${engagement.id}`)}>Open it</button>
+          This lead already has a project. <button className="btn link" onClick={() => nav(`/app/projects/${engagement.id}`)}>Open it</button>
         </div>
       ) : convert ? (
         <ConvertForm lead={lead} onCancel={() => setConvert(false)} />
       ) : (
-        <button className="btn primary" onClick={() => setConvert(true)}>Convert to engagement</button>
+        <button className="btn primary" onClick={() => setConvert(true)}>Create project</button>
       )}
       <NotesLog opportunityId={lead.ghl_id} />
     </Drawer>
@@ -1829,8 +1834,8 @@ function Engagements() {
   return (
     <>
       <div className="pagehead">
-        <div><h1>Engagements</h1><p>Every client you are talking to about work: valuations, sell-side, business plans and the rest. Click one to open it.</p></div>
-        <button className="btn primary" onClick={() => setAdding(true)}>New engagement</button>
+        <div><h1>Projects</h1><p>All client work in one place: valuations, sell-side, business plans and the rest. Click one to open it.</p></div>
+        <button className="btn primary" onClick={() => setAdding(true)}>New project</button>
       </div>
       {adding && <NewEngagementForm onCancel={() => setAdding(false)} />}
       <div className="row wrap" style={{ marginBottom: 14 }}>
@@ -1843,13 +1848,13 @@ function Engagements() {
       </div>
       <div className="card">
         {rows === null ? null : shown.length === 0 ? (
-          <Empty title="Nothing here">Click New engagement, or convert a lead from the Leads board.</Empty>
+          <Empty title="Nothing here">Click New project, or press Create project on a lead.</Empty>
         ) : (
           <table className="table">
             <thead><tr><th>Client</th><th>Company</th><th>Type</th><th>Stage</th><th>Fee</th><th>Last activity</th></tr></thead>
             <tbody>
               {shown.map((r) => (
-                <tr key={r.id} className="click" onClick={() => nav(`/app/engagements/${r.id}`)}>
+                <tr key={r.id} className="click" onClick={() => nav(`/app/projects/${r.id}`)}>
                   <td><strong>{r.client_name}</strong><div className="muted small">{r.client_email}</div></td>
                   <td>{r.company_name || "—"}<div className="muted small">{r.company_country}</div></td>
                   <td className="small">{typeLabel(r.engagement_type)}</td>
@@ -1866,20 +1871,20 @@ function Engagements() {
   );
 }
 
-/** An engagement without a lead. Nothing is emailed: you send the NDA or an invoice from the engagement when you are ready. */
+/** A project without a lead. Nothing is emailed: you send the NDA, an invoice or an email from the project when you are ready. */
 function NewEngagementForm({ onCancel }) {
   const nav = useNavigate();
   const [run, busy] = useAction();
-  const [f, setF] = useState({ type: "sell_side", client_name: "", client_email: "", company: "", country: "" });
+  const [f, setF] = useState({ type: "", client_name: "", client_email: "", company: "", country: "" });
   const set = (k) => (x) => setF({ ...f, [k]: x.target.value });
   const create = () => run(async () => {
     const e = await rpc("staff_new_engagement", { p_type: f.type, p_client_name: f.client_name, p_client_email: f.client_email, p_company: f.company, p_country: f.country });
-    nav(`/app/engagements/${e.id}`);
+    nav(`/app/projects/${e.id}`);
   });
   return (
-    <Card title="New engagement" style={{ marginBottom: 16 }}>
+    <Card title="New project" style={{ marginBottom: 16 }}>
       <div className="stack" style={{ gap: 10 }}>
-        <Field label="Type"><select value={f.type} onChange={set("type")}>{ENG_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
+        <Field label="Type"><select value={f.type} onChange={set("type")}><option value="">Choose the type…</option>{ENG_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
         <div className="grid2">
           <Field label="Client full name"><input value={f.client_name} onChange={set("client_name")} autoFocus /></Field>
           <Field label="Email"><input type="email" value={f.client_email} onChange={set("client_email")} /></Field>
@@ -1888,9 +1893,9 @@ function NewEngagementForm({ onCancel }) {
           <Field label="Company (optional)"><input value={f.company} onChange={set("company")} /></Field>
           <Field label="Country (optional, decides which company invoices)"><input value={f.country} onChange={set("country")} placeholder="e.g. Greece" /></Field>
         </div>
-        <p className="muted small" style={{ margin: 0 }}>Only the name is needed. Nothing is sent to the client.</p>
+        <p className="muted small" style={{ margin: 0 }}>Only the type and name are needed. Nothing is sent to the client. Make the OneDrive folder from the project page.</p>
         <div className="row">
-          <button className="btn primary" disabled={busy || !f.client_name.trim()} onClick={create}>Create engagement</button>
+          <button className="btn primary" disabled={busy || !f.type || !f.client_name.trim()} onClick={create}>Create project</button>
           <button className="btn" onClick={onCancel}>Cancel</button>
         </div>
       </div>
@@ -1916,71 +1921,24 @@ function EngagementFollowup({ e }) {
   return <Card title="Follow-up"><p className="muted small" style={{ margin: "0 0 10px" }}>Sent a draft and heard nothing? Start the follow-up: a touch every 3 working days, 5 in total. A client who has paid never goes to Lost; after the last touch they go Quiet and come back on your list every 30 days.</p><LeadTasks lead={lead} fu={fu} reload={load} engagement={e} /></Card>;
 }
 
-// ===================== pages/Projects.jsx =====================
-/** Every project, from any engagement. A project can start with details missing. */
-function Projects() {
-  const nav = useNavigate();
-  const [rows, setRows] = useState(null);
-  const [filter, setFilter] = useState("open");
-  useEffect(() => {
-    supabase.from("projects").select("id, code, title, service_line, stage, started_at, fee, engagement_id, engagements(client_name, company_name)")
-      .order("started_at", { ascending: false }).then(({ data }) => setRows(data ?? []));
-  }, []);
-  const shown = (rows ?? []).filter((r) => filter === "all" ? true : filter === "open" ? r.stage !== "closed" : r.stage === "closed");
-  return (
-    <>
-      <div className="pagehead">
-        <div><h1>Projects</h1><p>The work itself. Create one from any engagement with "Create project".</p></div>
-      </div>
-      <div className="row wrap" style={{ marginBottom: 14 }}>
-        {[["open", "Open"], ["closed", "Closed"], ["all", "All"]].map(([k, l]) => <button key={k} className={`btn ${filter === k ? "primary" : ""}`} onClick={() => setFilter(k)}>{l}</button>)}
-      </div>
-      <div className="card">
-        {rows === null ? null : shown.length === 0 ? <Empty title="No projects yet">Open an engagement and click Create project.</Empty> : (
-          <table className="table">
-            <thead><tr><th>Project</th><th>Client</th><th>Type</th><th>Stage</th><th>Started</th></tr></thead>
-            <tbody>
-              {shown.map((r) => (
-                <tr key={r.id} className="click" onClick={() => nav(`/app/projects/${r.id}`)}>
-                  <td><strong>{r.title}</strong><div className="muted small">{r.code}</div></td>
-                  <td>{r.engagements?.company_name || r.engagements?.client_name || "—"}{r.engagements?.company_name && <div className="muted small">{r.engagements.client_name}</div>}</td>
-                  <td className="small">{typeLabel(r.service_line)}</td>
-                  <td><Chip kind={r.stage === "closed" ? "ok" : "brand"}>{projectStageLabel(r.stage)}</Chip></td>
-                  <td className="muted">{day(r.started_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </>
-  );
-}
-
-function ProjectDetail() {
-  const { id } = useParams();
+// ===================== project blocks =====================
+/** Tasks on a project (kept on the project's task list, which is made the first time a task is added). */
+function ProjectTasks({ e }) {
   const [run, busy] = useAction();
-  const [p, setP] = useState(null);
-  const [e, setE] = useState(null);
+  const [pid, setPid] = useState(undefined);
   const [tasks, setTasks] = useState([]);
   const [team, setTeam] = useState([]);
-  const [edit, setEdit] = useState(null);       // { title, notes, fee }
   const [nt, setNt] = useState({ title: "", assignee_id: "", due: "" });
   const load = useCallback(async () => {
-    const { data: pr } = await supabase.from("projects").select("*").eq("id", id).single();
-    setP(pr);
-    if (pr?.engagement_id) {
-      const { data: en } = await supabase.from("engagements").select("id, client_name, client_email, company_name, engagement_type, onedrive_url").eq("id", pr.engagement_id).maybeSingle();
-      setE(en);
-    }
-    const { data: t } = await supabase.from("tasks").select("*").eq("project_id", id).order("created_at");
-    setTasks(t ?? []);
-  }, [id]);
+    const { data: pr } = await supabase.from("projects").select("id").eq("engagement_id", e.id).order("started_at").limit(1).maybeSingle();
+    setPid(pr?.id ?? null);
+    if (pr?.id) { const { data: t } = await supabase.from("tasks").select("*").eq("project_id", pr.id).order("created_at"); setTasks(t ?? []); } else setTasks([]);
+  }, [e.id]);
   useEffect(() => { load(); supabase.from("staff").select("user_id, full_name").then(({ data }) => setTeam(data ?? [])); }, [load]);
-  if (!p) return null;
-  const save = (patch, msg = "Saved") => run(async () => { const { error } = await supabase.from("projects").update(patch).eq("id", p.id); if (error) throw new Error(error.message); await load(); }, msg);
-  const addTask = () => run(async () => {
-    const { error } = await supabase.from("tasks").insert({ project_id: p.id, title: nt.title.trim(), assignee_id: nt.assignee_id || null, due_at: nt.due ? `${nt.due}T17:00:00` : null });
+  const add = () => run(async () => {
+    let id = pid;
+    if (!id) id = (await rpc("staff_create_project", { p_engagement: e.id })).id;
+    const { error } = await supabase.from("tasks").insert({ project_id: id, title: nt.title.trim(), assignee_id: nt.assignee_id || null, due_at: nt.due ? `${nt.due}T17:00:00` : null });
     if (error) throw new Error(error.message);
     setNt({ title: "", assignee_id: nt.assignee_id, due: "" }); await load();
   });
@@ -1988,7 +1946,7 @@ function ProjectDetail() {
   const remove = (t) => run(async () => { const { error } = await supabase.from("tasks").delete().eq("id", t.id); if (error) throw new Error(error.message); await load(); }, "Task removed");
   const who = (uid) => team.find((m) => m.user_id === uid)?.full_name ?? "";
   const open = tasks.filter((t) => t.status !== "done"), done = tasks.filter((t) => t.status === "done");
-  const taskRow = (t) => (
+  const row = (t) => (
     <div key={t.id} className="row between small" style={{ gap: 8 }}>
       <label className="check" style={{ flex: 1, minWidth: 0 }}><input type="checkbox" checked={t.status === "done"} onChange={() => toggle(t)} /><span style={{ textDecoration: t.status === "done" ? "line-through" : "none" }}>{t.title}</span></label>
       <span className="muted" style={{ flex: "none" }}>{[who(t.assignee_id), t.due_at && day(t.due_at)].filter(Boolean).join(" · ")}</span>
@@ -1996,62 +1954,85 @@ function ProjectDetail() {
     </div>
   );
   return (
-    <>
-      <div className="pagehead">
-        <div>
-          <div className="muted small"><Link to="/app/projects">Projects</Link> / {p.code}</div>
-          <h1>{p.title}</h1>
-          <p>{typeLabel(p.service_line)}{e ? ` · ${e.client_name}${e.company_name ? `, ${e.company_name}` : ""}` : ""}</p>
-        </div>
-        <div className="row">
-          {e?.onedrive_url && <a className="btn" href={e.onedrive_url} target="_blank" rel="noreferrer">OneDrive folder</a>}
-          {e && <Link className="btn" to={`/app/engagements/${e.id}`}>Engagement (NDA, invoices, files)</Link>}
-          <select value={p.stage} disabled={busy} onChange={(x) => save({ stage: x.target.value, ...(x.target.value === "closed" ? { closed_at: new Date().toISOString() } : {}) }, "Stage updated")}>
-            {PROJECT_STAGES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-          </select>
+    <Card title={`Tasks${tasks.length ? ` · ${open.length} open` : ""}`}>
+      <div className="stack" style={{ gap: 8 }}>
+        {pid !== undefined && tasks.length === 0 && <span className="muted small">No tasks yet.</span>}
+        {open.map(row)}
+        {done.length > 0 && <div className="muted small" style={{ marginTop: 6 }}>Done</div>}
+        {done.map(row)}
+        <div className="row wrap" style={{ gap: 6, marginTop: 4 }}>
+          <input style={{ flex: 1, minWidth: 160 }} value={nt.title} onChange={(x) => setNt({ ...nt, title: x.target.value })} onKeyDown={(x) => x.key === "Enter" && nt.title.trim() && add()} placeholder="New task, e.g. Prepare teaser" />
+          <select value={nt.assignee_id} onChange={(x) => setNt({ ...nt, assignee_id: x.target.value })}><option value="">Anyone</option>{team.map((m) => <option key={m.user_id} value={m.user_id}>{m.full_name}</option>)}</select>
+          <input type="date" value={nt.due} onChange={(x) => setNt({ ...nt, due: x.target.value })} />
+          <button className="btn primary" disabled={busy || !nt.title.trim()} onClick={add}>Add</button>
         </div>
       </div>
-      <div className="grid2">
-        <div className="stack" style={{ gap: 16 }}>
-          <Card title={`Tasks · ${open.length} open`}>
-            <div className="stack" style={{ gap: 8 }}>
-              {tasks.length === 0 && <span className="muted small">No tasks yet. Add the first one below.</span>}
-              {open.map(taskRow)}
-              {done.length > 0 && <div className="muted small" style={{ marginTop: 6 }}>Done</div>}
-              {done.map(taskRow)}
-              <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
-                <input style={{ flex: 1, minWidth: 180 }} value={nt.title} onChange={(x) => setNt({ ...nt, title: x.target.value })} onKeyDown={(x) => x.key === "Enter" && nt.title.trim() && addTask()} placeholder="New task, e.g. Prepare teaser" />
-                <select value={nt.assignee_id} onChange={(x) => setNt({ ...nt, assignee_id: x.target.value })}><option value="">Anyone</option>{team.map((m) => <option key={m.user_id} value={m.user_id}>{m.full_name}</option>)}</select>
-                <input type="date" value={nt.due} onChange={(x) => setNt({ ...nt, due: x.target.value })} />
-                <button className="btn primary" disabled={busy || !nt.title.trim()} onClick={addTask}>Add</button>
-              </div>
-            </div>
-          </Card>
+    </Card>
+  );
+}
+
+/** Write an email from the project to anyone (client, buyer, adviser) and attach the project's files. Sent only when you press Send. */
+function ProjectEmail({ e }) {
+  const [run, busy] = useAction();
+  const [files, setFiles] = useState([]);
+  const [m, setM] = useState(null);       // { to, cc, subject, text, pick: Set }
+  const [sent, setSent] = useState([]);
+  const load = useCallback(async () => {
+    const [d, c, l] = await Promise.all([
+      supabase.from("documents").select("id, name, storage_path, created_at").eq("engagement_id", e.id).order("created_at", { ascending: false }),
+      supabase.from("client_documents").select("id, label, storage_path, uploaded_at").eq("engagement_id", e.id).not("uploaded_at", "is", null),
+      supabase.from("activity_log").select("id, detail, created_at").eq("engagement_id", e.id).eq("action", "email.sent").order("created_at", { ascending: false }).limit(10),
+    ]);
+    setFiles([...(d.data ?? []).map((x) => ({ path: x.storage_path, name: x.name })), ...(c.data ?? []).map((x) => ({ path: x.storage_path, name: `${x.label} (from client)` }))].filter((x) => x.path));
+    setSent(l.data ?? []);
+  }, [e.id]);
+  useEffect(() => { load(); }, [load]);
+  const start = () => {
+    const first = String(e.client_name || "").trim().split(/\s+/)[0];
+    setM({ to: e.client_email || "", cc: "", subject: `${e.company_name || e.client_name}`, text: `Dear ${first},\n\n\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory`, pick: new Set() });
+  };
+  const flip = (path) => setM((cur) => { const pick = new Set(cur.pick); if (pick.has(path)) pick.delete(path); else pick.add(path); return { ...cur, pick }; });
+  const send = () => run(async () => {
+    await callFn("engagement-send", { kind: "project_email", engagement_id: e.id, to: m.to, cc: m.cc, subject: m.subject, text: m.text, files: [...m.pick] });
+    setM(null); await load();
+  }, "Email sent");
+  return (
+    <Card title="Email" right={!m && <button className="btn" onClick={start}>Write email</button>}>
+      {m ? (
+        <div className="stack" style={{ gap: 10 }}>
+          <div className="grid2">
+            <Field label="To (several: separate with commas)"><input value={m.to} onChange={(x) => setM({ ...m, to: x.target.value })} placeholder="name@company.com" /></Field>
+            <Field label="Cc (optional)"><input value={m.cc} onChange={(x) => setM({ ...m, cc: x.target.value })} /></Field>
+          </div>
+          <Field label="Subject"><input value={m.subject} onChange={(x) => setM({ ...m, subject: x.target.value })} /></Field>
+          <Field label="Message"><textarea rows={9} value={m.text} onChange={(x) => setM({ ...m, text: x.target.value })} /></Field>
+          <div className="stack" style={{ gap: 4 }}>
+            <span className="small" style={{ color: "var(--text-3)" }}>Attach files from this project</span>
+            {files.length === 0 && <span className="muted small">No files on the project yet.</span>}
+            {files.map((f) => <label key={f.path} className="check small"><input type="checkbox" checked={m.pick.has(f.path)} onChange={() => flip(f.path)} />{f.name}</label>)}
+            <span className="muted small">Up to about 3 MB in total. For bigger files, put the OneDrive link in the message instead.</span>
+          </div>
+          <div className="row">
+            <button className="btn primary" disabled={busy || !m.to.trim() || !m.subject.trim() || !m.text.trim()} onClick={send}>Send from info@</button>
+            <button className="btn" onClick={() => setM(null)}>Cancel</button>
+          </div>
         </div>
-        <div className="stack" style={{ gap: 16 }}>
-          <Card title="Details" right={!edit && <button className="btn" onClick={() => setEdit({ title: p.title ?? "", notes: p.notes ?? "", fee: p.fee ?? "" })}>Edit</button>}>
-            {edit ? (
-              <div className="stack" style={{ gap: 10 }}>
-                <Field label="Project name"><input value={edit.title} onChange={(x) => setEdit({ ...edit, title: x.target.value })} /></Field>
-                <Field label="Fee (optional)"><input type="number" min="0" step="100" value={edit.fee} onChange={(x) => setEdit({ ...edit, fee: x.target.value })} /></Field>
-                <Field label="Notes"><textarea rows={6} value={edit.notes} onChange={(x) => setEdit({ ...edit, notes: x.target.value })} placeholder="Scope, what is missing, who to speak to…" /></Field>
-                <div className="row">
-                  <button className="btn primary" disabled={busy || !edit.title.trim()} onClick={() => save({ title: edit.title.trim(), notes: edit.notes, fee: edit.fee === "" ? null : Number(edit.fee) }).then((ok) => ok && setEdit(null))}>Save</button>
-                  <button className="btn" onClick={() => setEdit(null)}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div className="stack small" style={{ gap: 6 }}>
-                <div><span className="muted">Code</span> {p.code}</div>
-                <div><span className="muted">Started</span> {day(p.started_at)}</div>
-                <div><span className="muted">Fee</span> {p.fee ? eur(p.fee) : "not set"}</div>
-                <div style={{ whiteSpace: "pre-wrap" }}><span className="muted">Notes</span> {p.notes || "none"}</div>
-              </div>
-            )}
-          </Card>
-        </div>
-      </div>
-    </>
+      ) : sent.length === 0 ? <span className="muted small">Nothing sent from this project yet. Emails go only when you press Send.</span> : (
+        <ul className="feed">{sent.map((x) => <li key={x.id}><span className="when">{ago(x.created_at)}</span><span>{x.detail?.subject} · to {x.detail?.to}{x.detail?.files?.length ? ` · ${x.detail.files.length} file${x.detail.files.length === 1 ? "" : "s"}` : ""}</span></li>)}</ul>
+      )}
+    </Card>
+  );
+}
+
+/** Status for projects that are not valuations (valuations keep their own stages). */
+function ProjectStatus({ e, reload }) {
+  const [run, busy] = useAction();
+  const val = e.stage === "valuation_active" ? "valuation_active" : ["completed", "declined"].includes(e.stage) ? e.stage : "deposit_pending";
+  const change = (to) => run(async () => { const { error } = await supabase.from("engagements").update({ stage: to }).eq("id", e.id); if (error) throw new Error(error.message); await reload(); }, "Status updated");
+  return (
+    <select value={val} disabled={busy} onChange={(x) => change(x.target.value)} title="Project status">
+      <option value="deposit_pending">Open</option><option value="valuation_active">In progress</option><option value="completed">Completed</option><option value="declined">Did not go ahead</option>
+    </select>
   );
 }
 
@@ -2192,10 +2173,8 @@ function EngagementDetail() {
   const [agreements, setAgreements] = useState([]);
   const [feed, setFeed] = useState([]);
   const [contact, setContact] = useState(null);
-  const [project, setProject] = useState(undefined);
 
   const load = useCallback(async () => {
-    supabase.from("projects").select("id, code, title").eq("engagement_id", id).order("started_at").limit(1).maybeSingle().then(({ data }) => setProject(data ?? null));
     const [a, b, c, d, f, g] = await Promise.all([
       supabase.from("engagements").select("*").eq("id", id).single(),
       supabase.from("deposits").select("*").eq("engagement_id", id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
@@ -2213,7 +2192,7 @@ function EngagementDetail() {
   useEffect(() => { load(); }, [load]);
 
   if (!e) return null;
-  if (isSimple(e)) return <SimpleEngagement e={e} invoices={invoices} feed={feed} contact={contact} project={project} reload={load} />;
+  if (isSimple(e)) return <SimpleEngagement e={e} invoices={invoices} feed={feed} contact={contact} reload={load} />;
   const idx = stageIndex(e.stage);
   const st = ENGAGEMENT_STAGES[idx];
   const canDecline = !["engaged", "valuation_active", "completed", "declined"].includes(e.stage);
@@ -2222,12 +2201,11 @@ function EngagementDetail() {
     <>
       <div className="pagehead">
         <div>
-          <div className="muted small"><Link to="/app/engagements">Engagements</Link> / {e.company_name || e.client_name}</div>
+          <div className="muted small"><Link to="/app/projects">Projects</Link> / {e.company_name || e.client_name}</div>
           <h1>{e.company_name || e.client_name}</h1>
           <p>{e.client_name}{e.client_title ? `, ${e.client_title}` : ""} · {e.client_email}</p>
         </div>
         <div className="row">
-          <ProjectButton e={e} project={project} />
           <a className="btn" href={`${PORTAL_URL}?as=${e.id}`} target="_blank" rel="noreferrer">Preview client's page</a>
           <Chip kind={e.stage === "declined" ? "danger" : e.stage === "completed" ? "ok" : "brand"}>{stageLabel(e.stage)}</Chip>
         </div>
@@ -2238,6 +2216,8 @@ function EngagementDetail() {
       <div className="grid2" style={{ marginTop: 18 }}>
         <div className="stack" style={{ gap: 16 }}>
           <NextStep e={e} st={st} deposit={deposit} docs={docs} invoices={invoices} agreements={agreements} reload={load} />
+          <ProjectTasks e={e} />
+          <ProjectEmail e={e} />
           {!["declined"].includes(e.stage) && <LetterCard e={e} reload={load} agreements={agreements} />}
           <Checklist e={e} docs={docs} reload={load} />
           <ShareDocCard e={e} docs={docs} reload={load} />
@@ -2265,37 +2245,29 @@ function EngagementDetail() {
   );
 }
 
-/** "Create project" any time (details can be missing), or "Open project" once there is one. */
-function ProjectButton({ e, project }) {
-  const nav = useNavigate();
-  const [run, busy] = useAction();
-  if (project === undefined) return null;
-  if (project) return <Link className="btn primary" to={`/app/projects/${project.id}`}>Open project {project.code}</Link>;
-  return <button className="btn primary" disabled={busy} onClick={() => run(async () => { const p = await rpc("staff_create_project", { p_engagement: e.id }); nav(`/app/projects/${p.id}`); }, "Project created")}>Create project</button>;
-}
-
-/** Any engagement that is not a valuation: NDA, files, invoices, notes. Nothing goes to the client unless you press a send button. */
-function SimpleEngagement({ e, invoices, feed, contact, project, reload }) {
-  const canDecline = !["completed", "declined"].includes(e.stage);
+/** Any project that is not a valuation: email, tasks, files, NDA, invoices, notes. Nothing goes to anyone unless you press a send button. */
+function SimpleEngagement({ e, invoices, feed, contact, reload }) {
   return (
     <>
       <div className="pagehead">
         <div>
-          <div className="muted small"><Link to="/app/engagements">Engagements</Link> / {e.company_name || e.client_name}</div>
+          <div className="muted small"><Link to="/app/projects">Projects</Link> / {e.company_name || e.client_name}</div>
           <h1>{e.company_name || e.client_name}</h1>
           <p>{typeLabel(e.engagement_type)} · {e.client_name}{e.client_email ? ` · ${e.client_email}` : ""}</p>
         </div>
-        <div className="row">
-          <ProjectButton e={e} project={project} />
-          <Chip kind={e.stage === "declined" ? "danger" : e.stage === "completed" ? "ok" : "brand"}>{engStageLabel(e)}</Chip>
-        </div>
+        <div className="row"><ProjectStatus e={e} reload={reload} /></div>
       </div>
       <div className="grid2">
         <div className="stack" style={{ gap: 16 }}>
-          <Card title="NDA"><NdaMaker engagement={e} /></Card>
-          <SimpleInvoices e={e} invoices={invoices} reload={reload} />
-          <EngagementFiles e={e} />
-          {canDecline && <DeclineBox e={e} reload={reload} />}
+          <ProjectEmail e={e} />
+          <ProjectTasks e={e} />
+          <Card title="Documents">
+            <div className="stack" style={{ gap: 18 }}>
+              <EngagementFiles e={e} bare />
+              <div style={{ borderTop: "1px solid var(--border-sub)", paddingTop: 12 }}><h3 style={{ margin: "0 0 8px" }}>NDA</h3><NdaMaker engagement={e} /></div>
+              <div style={{ borderTop: "1px solid var(--border-sub)", paddingTop: 12 }}><SimpleInvoices e={e} invoices={invoices} reload={reload} bare /></div>
+            </div>
+          </Card>
         </div>
         <div className="stack" style={{ gap: 16 }}>
           <ClientDetails e={e} reload={reload} />
@@ -2313,7 +2285,7 @@ function SimpleEngagement({ e, invoices, feed, contact, project, reload }) {
 }
 
 /** Files kept on the engagement (internal; they also go to the OneDrive folder on the next sync). */
-function EngagementFiles({ e }) {
+function EngagementFiles({ e, bare }) {
   const [run, busy] = useAction();
   const [rows, setRows] = useState([]);
   const load = useCallback(async () => {
@@ -2334,19 +2306,19 @@ function EngagementFiles({ e }) {
     await load();
   }, "Saved");
   return (
-    <Card title="Files">
+    <Section bare={bare} title="Files">
       <div className="stack" style={{ gap: 6 }}>
         {rows.length === 0 && <span className="muted small">No files yet.</span>}
         {rows.map((d) => <div key={d.id} className="row between small"><span>{d.name}<div className="muted">{ago(d.created_at)}</div></span><button className="btn" onClick={() => open(d.storage_path)}>Open</button></div>)}
         <DropZone busy={busy} onFiles={upload} label="Drop files here or click to choose" />
-        <span className="muted small">Kept inside Solonos only. The client does not see them.</span>
+        <span className="muted small">Kept inside Solonos (and OneDrive after a sync). Tick them in Email to send them.</span>
       </div>
-    </Card>
+    </Section>
   );
 }
 
 /** Invoices of any amount. Creating one makes the PDF only; you email it yourself with your own text. */
-function SimpleInvoices({ e, invoices, reload }) {
+function SimpleInvoices({ e, invoices, reload, bare }) {
   const [run, busy] = useAction();
   const [form, setForm] = useState(null);
   const [mail, setMail] = useState(null);
@@ -2366,7 +2338,7 @@ function SimpleInvoices({ e, invoices, reload }) {
   };
   const send = (m) => run(async () => { await callFn("engagement-send", { kind: "invoice_email", invoice_id: mail.inv.id, to: m.to, subject: m.subject, text: m.text }); setMail(null); await reload(); }, "Invoice emailed");
   return (
-    <Card title="Invoices" right={!form && <button className="btn" onClick={() => setForm({ description: `${typeLabel(e.engagement_type)}${e.company_name ? ` - ${e.company_name}` : ""}`, amount: "", currency: "EUR" })}>New invoice</button>}>
+    <Section bare={bare} title="Invoices" right={!form && <button className="btn" onClick={() => setForm({ description: `${typeLabel(e.engagement_type)}${e.company_name ? ` - ${e.company_name}` : ""}`, amount: "", currency: "EUR" })}>New invoice</button>}>
       {form && (
         <div className="card" style={{ padding: 12, background: "var(--sunken)", marginBottom: 12 }}>
           <div className="stack" style={{ gap: 10 }}>
@@ -2403,7 +2375,7 @@ function SimpleInvoices({ e, invoices, reload }) {
         </tbody></table>
       )}
       {mail && <EmailDialog title={`Email invoice ${no(mail.inv)}`} to={mail.to} subject={mail.subject} text={mail.text} attached={`Invoice ${no(mail.inv)}.pdf`} busy={busy} onSend={send} onCancel={() => setMail(null)} />}
-    </Card>
+    </Section>
   );
 }
 
@@ -2444,7 +2416,7 @@ function NextStep({ e, st, deposit, docs, invoices, agreements, reload }) {
           Letter signed, Invoice 1 issued (right). When the transfer lands, mark it paid there, then start the valuation.
         </p>
       );
-      case "valuation_active": return <p className="small" style={{ margin: 0 }}>Project created. Open it from the button at the top.</p>;
+      case "valuation_active": return <p className="small" style={{ margin: 0 }}>Valuation under way. Tasks and emails are below.</p>;
       case "completed": return <p className="small" style={{ margin: 0 }}>Done. Invoice 2 paid, final report delivered.</p>;
       case "declined": return <p className="small" style={{ margin: 0 }}>Declined{e.declined_reason ? `: ${e.declined_reason}` : ""}. Deposit kept.</p>;
       default: return null;
@@ -3046,7 +3018,8 @@ function Invoices({ invoices, reload }) {
 function describe(f, who = "Client") {
   const d = f.detail ?? {};
   switch (f.action) {
-    case "engagement.created": return d.manual ? `Engagement created (${typeLabel(d.type)})` : "Engagement created from lead";
+    case "engagement.created": return d.manual ? `Project created (${typeLabel(d.type)})` : "Project created from lead";
+    case "email.sent": return `Email "${d.subject}" sent to ${d.to}${d.files?.length ? ` with ${d.files.length} file${d.files.length === 1 ? "" : "s"}` : ""}`;
     case "invoice.emailed": return `Invoice ${d.no} emailed to ${d.to}`;
     case "engagement.stage": return `Moved to ${stageLabel(d.to)}`;
     case "deposit.link_created": return "Stripe deposit link created";
@@ -3480,7 +3453,7 @@ function PortalNoEngagement({ session }) {
         <option value="">Choose a client…</option>
         {engs.map((g) => <option key={g.id} value={g.id} style={{ color: "#222" }}>{g.company_name || g.client_name} · {stageLabel(g.stage)}</option>)}
       </select>
-      <p style={{ marginTop: 14, fontSize: 13 }}><a href="/app/engagements" style={{ color: "var(--on)" }}>Back to Solonos</a></p>
+      <p style={{ marginTop: 14, fontSize: 13 }}><a href="/app/projects" style={{ color: "var(--on)" }}>Back to Solonos</a></p>
     </div></div>
   );
   return (
@@ -3936,7 +3909,6 @@ function Dashboard() {
 const NAV = [
   ["Dashboard", "/app/dashboard"],
   ["Leads", "/app/leads"],
-  ["Engagements", "/app/engagements"],
   ["Valuation Builder", "/app/valuation-builder"],
   ["Clients", "/app/clients", 5],
   ["Projects", "/app/projects"],
@@ -3986,7 +3958,7 @@ function Shell({ session, staff, signOut }) {
         <div className="menu">
         <Bell />
         {limited ? <NavLink to="/app/projects" className={({ isActive }) => (isActive ? "active" : "")}>Projects</NavLink> : <>
-        <a href="/app/engagements" title="Open an engagement and click 'Preview client's page'">Client portal <span className="soon">via engagement</span></a>
+        <a href="/app/projects" title="Open a project and click 'Preview client's page'">Client portal <span className="soon">via project</span></a>
         {NAV.filter(([, , , role]) => !role || staff?.role === role).map(([label, to, slice]) => (
           <NavLink key={to} to={to} className={({ isActive }) => (isActive ? "active" : "")}>
             {label}{slice && <span className="soon">slice {slice}</span>}
@@ -4005,8 +3977,8 @@ function Shell({ session, staff, signOut }) {
       <main className="main">
         {limited ? (
         <Routes>
-          <Route path="/app/projects" element={<Projects />} />
-          <Route path="/app/projects/:id" element={<ProjectDetail />} />
+          <Route path="/app/projects" element={<Engagements />} />
+          <Route path="/app/projects/:id" element={<EngagementDetail />} />
           <Route path="/app/engagements/:id" element={<EngagementDetail />} />
           <Route path="*" element={<Navigate to="/app/projects" replace />} />
         </Routes>
@@ -4020,8 +3992,8 @@ function Shell({ session, staff, signOut }) {
           <Route path="/app/valuation-builder" element={<ValuationBuilder />} />
           <Route path="/app/settings" element={<Settings />} />
           <Route path="/app/tasks" element={<Tasks />} />
-          <Route path="/app/projects" element={<Projects />} />
-          <Route path="/app/projects/:id" element={<ProjectDetail />} />
+          <Route path="/app/projects" element={<Engagements />} />
+          <Route path="/app/projects/:id" element={<EngagementDetail />} />
           <Route path="/app/onedrive" element={staff?.role === "partner" ? <OneDrivePage /> : <Navigate to="/app/leads" replace />} />
           <Route path="/app/*" element={<Soon />} />
           <Route path="*" element={<Navigate to="/app/leads" replace />} />
@@ -4060,7 +4032,7 @@ function Bell() {
         <div style={{ position: "absolute", left: 10, top: 36, width: 340, background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "0 10px 30px rgba(0,0,0,.25)", zIndex: 40, maxHeight: 420, overflowY: "auto" }}>
           {items.length === 0 && <div className="muted small" style={{ padding: 12 }}>No client activity yet.</div>}
           {items.map((r) => (
-            <div key={r.id} onClick={() => { setOpen(false); nav(`/app/engagements/${r.engagement_id}`); }} style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-sub)", cursor: "pointer", fontSize: 12 }}>
+            <div key={r.id} onClick={() => { setOpen(false); nav(`/app/projects/${r.engagement_id}`); }} style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-sub)", cursor: "pointer", fontSize: 12 }}>
               <div>{describe(r, r.eng?.client_name ?? r.actor)}</div>
               <div className="muted">{r.eng?.company_name || ""} · {ago(r.created_at)}</div>
             </div>
