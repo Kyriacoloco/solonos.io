@@ -28,7 +28,8 @@ create or replace function engagement_type_label(t text) returns text language s
     when 'restructuring' then 'Restructuring Report' when 'cfo' then 'CFO Services' else 'Project' end
 $$;
 
--- ---- an engagement without a lead
+-- ---- an engagement without a lead (email can come later; without it there is simply no client page)
+alter table engagements alter column client_email drop not null;
 create or replace function staff_new_engagement(p_type text, p_client_name text, p_client_email text,
   p_company text default null, p_country text default null, p_opportunity text default null) returns engagements
 language plpgsql security definer set search_path = public as $$
