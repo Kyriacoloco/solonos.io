@@ -9,6 +9,8 @@
 //   POST { action: "sync", engagement_id }                        Solonos -> OneDrive for new Solonos files, OneDrive -> Solonos for new OneDrive files
 //   POST { action: "roots" | "browse" | "search" | "upload" | "mkdir" }  the OneDrive page in Solonos (partner only)
 //   POST { action: "sync_all" } with header x-push-secret         every 15 minutes from Supabase Cron: syncs every linked engagement
+// Version 1.2 (23 Oct 2026): browse / upload / mkdir with engagement_id work for any staff, but only inside that project's folder
+//   (the OneDrive tab on a project). The whole-OneDrive page stays partner only.
 // Version 1.1 (23 Oct 2026): OneDrive page (live browse, search, upload, new folder) and automatic sync. 1.0: engagement folders.
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -94,6 +96,20 @@ Deno.serve(async (req) => {
   const { data: isStaff } = await me.rpc("is_staff");
   if (!isStaff) return json({ error: "staff only" }, 403);
   try {
+    // ---- the OneDrive tab on a project: any staff, but only inside that project's own folder
+    if (["browse", "upload", "mkdir"].includes(body.action) && body.engagement_id) {
+      const { data: en } = await db.from("engagements").select("onedrive_drive_id, onedrive_folder_id").eq("id", body.engagement_id).single();
+      if (!en?.onedrive_folder_id) throw new Error("This project has no OneDrive folder yet");
+      if (body.drive !== en.onedrive_drive_id) return json({ error: "Outside this project's folder" }, 403);
+      if (body.item !== en.onedrive_folder_id) {
+        const root: any = await g(`/drives/${en.onedrive_drive_id}/items/${en.onedrive_folder_id}?$select=name,parentReference`);
+        const rootPath = decodeURIComponent(`${root.parentReference?.path ?? ""}/${root.name}`);
+        const it: any = await g(`/drives/${en.onedrive_drive_id}/items/${body.item}?$select=parentReference`);
+        const p = decodeURIComponent(it.parentReference?.path ?? "");
+        if (!(p === rootPath || p.startsWith(rootPath + "/"))) return json({ error: "Outside this project's folder" }, 403);
+      }
+      return json({ ok: true, ...(await page(db, body)) });
+    }
     // ---- the OneDrive page: partner only, because the Microsoft permission covers the whole company account
     if (["roots", "browse", "search", "upload", "mkdir"].includes(body.action)) {
       const { data: u } = await me.auth.getUser();
