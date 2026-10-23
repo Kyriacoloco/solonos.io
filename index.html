@@ -236,7 +236,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.17";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.18";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -2173,7 +2173,7 @@ function ValuationProject({ e, deposit, invoices, docs, agreements, feed, contac
           </div>
         </div>
       )}
-      {tab === "onedrive" && <ProjectOneDrive e={e} reload={reload} />}
+      {tab === "onedrive" && <div className="stack" style={{ gap: 16 }}><DataRoomCard e={e} reload={reload} /><ProjectOneDrive e={e} reload={reload} /></div>}
       {tab === "engagement" && (
         <>
           <Stepper stage={e.stage} />
@@ -2213,7 +2213,7 @@ function useProjectTab() {
 function ProjectTabs({ tab, setTab, e }) {
   return (
     <div className="tabs">
-      {PROJECT_TABS.map(([k, l]) => <button key={k} className={`tab${tab === k ? " on" : ""}`} onClick={() => setTab(k)}>{l}{k === "onedrive" && !e.onedrive_folder_id ? " ·" : ""}</button>)}
+      {PROJECT_TABS.map(([k, l]) => <button key={k} className={`tab${tab === k ? " on" : ""}`} onClick={() => setTab(k)}>{l}{k === "onedrive" && !e.dataroom_folder_id ? " ·" : ""}</button>)}
     </div>
   );
 }
@@ -2274,6 +2274,46 @@ function InvoiceSummary({ invoices }) {
         const inv = mine.reduce((t, i) => t + Number(i.amount || 0), 0), paid = mine.filter((i) => i.status === "paid").reduce((t, i) => t + Number(i.amount || 0), 0);
         return <div key={c} className="row wrap" style={{ gap: 16 }}>{box("Invoiced", inv, c)}{box("Paid", paid, c, "var(--ok)")}{box("Owed", inv - paid, c, inv - paid > 0 ? "var(--warn)" : undefined)}</div>;
       })}
+    </Card>
+  );
+}
+
+/** The data room: a "Data Room" folder inside the project's OneDrive folder, shared with the client by Microsoft.
+ *  The client works in OneDrive itself (any size, any number of files, whole folders). */
+const ROOM_FOLDERS = (t) => (["sell_side", "ma"].includes(t)
+  ? ["Advisory Reports", "Corporate Documents", "Due Diligence Materials", "Financial Documents", "Legal Documents", "Marketing Materials", "Operational Information", "Transaction Process Documents"]
+  : ["Financial Statements", "Management Accounts", "Budget & Forecast", "Corporate & Legal", "Contracts", "Other"]);
+function DataRoomCard({ e, reload }) {
+  const [run, busy] = useAction();
+  const first = String(e.client_name || "").trim().split(/\s+/)[0];
+  const [f, setF] = useState(null);     // share form
+  if (!e.onedrive_folder_id) return null;
+  const shared = Array.isArray(e.dataroom_shared) ? e.dataroom_shared : [];
+  const create = () => run(async () => { await callFn("onedrive", { action: "dataroom", engagement_id: e.id }); await reload(); }, "Data room created in OneDrive");
+  const share = () => run(async () => { await callFn("onedrive", { action: "share_dataroom", engagement_id: e.id, email: f.email, message: f.message }); setF(null); await reload(); }, `Microsoft has emailed ${f.email} access to the data room`);
+  if (!e.dataroom_folder_id) return (
+    <Card title="Data room">
+      <p className="small" style={{ margin: "0 0 10px" }}>Creates a "Data Room" folder inside this project's OneDrive folder with these folders. You can add, rename or delete folders in OneDrive afterwards.</p>
+      <ol className="small" style={{ margin: "0 0 12px", paddingLeft: 20, columns: 2 }}>{ROOM_FOLDERS(e.engagement_type).map((n) => <li key={n}>{n}</li>)}</ol>
+      <button className="btn primary" disabled={busy} onClick={create}>Create data room</button>
+    </Card>
+  );
+  return (
+    <Card title="Data room" right={<a className="btn primary" href={e.dataroom_url} target="_blank" rel="noreferrer">Open data room</a>}>
+      <div className="stack" style={{ gap: 8 }}>
+        {shared.length === 0 ? <span className="muted small">Not shared yet. Only the Data Room folder is shared; the rest of the project folder stays private.</span>
+          : shared.map((x) => <div key={x.email} className="small">✓ {x.email} <span className="muted">· can view and upload · since {day(x.at)}</span></div>)}
+        {f ? (
+          <div className="card" style={{ padding: 12, background: "var(--sunken)" }}>
+            <div className="stack" style={{ gap: 10 }}>
+              <Field label="Client's email"><input type="email" value={f.email} onChange={(x) => setF({ ...f, email: x.target.value })} /></Field>
+              <Field label="Message in Microsoft's invitation email"><textarea rows={4} value={f.message} onChange={(x) => setF({ ...f, message: x.target.value })} /></Field>
+              <p className="muted small" style={{ margin: 0 }}>Microsoft sends one email with the link. They open it, get a code by email, and they're in. No Microsoft account needed. They can see the folders, upload and download.</p>
+              <div className="row"><button className="btn primary" disabled={busy || !f.email.trim()} onClick={share}>Share</button><button className="btn" onClick={() => setF(null)}>Cancel</button></div>
+            </div>
+          </div>
+        ) : <div><button className="btn" onClick={() => setF({ email: shared.length ? "" : (e.client_email || ""), message: `Dear ${first}, this is our secure data room for ${e.company_name || "your project"}. Please upload the documents into the matching folders. Kind regards, Kyriacos` })}>{shared.length ? "Share with someone else" : "Share with client"}</button></div>}
+      </div>
     </Card>
   );
 }
@@ -2383,7 +2423,7 @@ function SimpleEngagement({ e, invoices, feed, contact, reload }) {
           <div className="stack" style={{ gap: 16 }}><ClientDetails e={e} reload={reload} /><ActivityCard e={e} feed={feed} /></div>
         </div>
       )}
-      {tab === "onedrive" && <ProjectOneDrive e={e} reload={reload} />}
+      {tab === "onedrive" && <div className="stack" style={{ gap: 16 }}><DataRoomCard e={e} reload={reload} /><ProjectOneDrive e={e} reload={reload} /></div>}
       {tab === "engagement" && (
         <div className="grid2">
           <div className="stack" style={{ gap: 16 }}><Card title="NDA"><NdaMaker engagement={e} /></Card><LetterSlot e={e} /></div>
@@ -3433,6 +3473,7 @@ function Portal({ session }) {
     const ndaExists = (a.data ?? []).some((x) => x.kind === "nda" && ["sent", "signed"].includes(x.status));
     const ndaOk = (a.data ?? []).some((x) => x.kind === "nda" && x.status === "signed");
     const letterExists = (a.data ?? []).some((x) => x.kind === "engagement_letter");
+    if (isSimple(eng)) return;
     if (!previewId && eng.company_confirmed_at && eng.company_address && !ndaExists) {
       try { await callFn("engagement-send", { engagement_id: eng.id, kind: "nda" }); await load(); return; } catch (_) { /* staff can trigger it */ }
     }
@@ -3464,7 +3505,7 @@ function Portal({ session }) {
   };
   const STEPS = portalSteps(e);
   const inv1Paid = invoices.some((i) => i.seq === 1 && i.status === "paid");
-  const overviewMode = ["valuation_active", "completed"].includes(e.stage) || (e.stage === "engaged" && inv1Paid);
+  const overviewMode = isSimple(e) || ["valuation_active", "completed"].includes(e.stage) || (e.stage === "engaged" && inv1Paid);
   const current = overviewMode ? (step ?? "invoices") : (step ?? (!done.company ? "company" : !done.nda ? "nda" : !done.deposit ? "deposit" : !done.docs ? "docs" : letter && !done.letter ? "letter" : "invoices"));
 
   return (
@@ -3474,9 +3515,11 @@ function Portal({ session }) {
         {overviewMode ? (
           <>
             <a href="#" className={current === "invoices" ? "active" : ""} onClick={(x) => { x.preventDefault(); setStep("invoices"); }}>Overview</a>
+            {!isSimple(e) && <>
             <a href="#" className={current === "docs" ? "active" : ""} onClick={(x) => { x.preventDefault(); setStep("docs"); }}>Documents</a>
             <a href="#" className={current === "nda" ? "active" : ""} onClick={(x) => { x.preventDefault(); setStep("nda"); }}>NDA</a>
             <a href="#" className={current === "letter" ? "active" : ""} onClick={(x) => { x.preventDefault(); setStep("letter"); }}>Engagement letter</a>
+            </>}
           </>
         ) : STEPS.map((st) => (
           <a key={st.key} href="#" className={current === st.key ? "active" : ""} onClick={(x) => { x.preventDefault(); setStep(st.key); }}>
@@ -3491,6 +3534,11 @@ function Portal({ session }) {
       </nav>
       <main className="main">
         {preview && <div className="note" style={{ marginBottom: 14, background: "#F5E4C0" }}>Staff preview of {e.client_name}'s page. You see what they see; signing, confirming and uploading are disabled here.</div>}
+        {e.dataroom_url && (e.dataroom_shared ?? []).length > 0 && current === "invoices" && (
+          <Card title="Your data room" style={{ marginBottom: 16 }} right={<a className="btn primary" href={e.dataroom_url} target="_blank" rel="noreferrer">Open data room</a>}>
+            <p className="small" style={{ margin: 0 }}>Upload your documents into the matching folders. Any size, as many files as you need, and you can drag in whole folders. The first time, Microsoft emails you a short code to confirm it's you.</p>
+          </Card>
+        )}
         {current === "nda" && (
           <>
             <div className="pagehead"><div><h1>Non-Disclosure Agreement</h1><p>Read it below, then sign at the bottom. This is what lets us receive your financial information in confidence.</p></div></div>
