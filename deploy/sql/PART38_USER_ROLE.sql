@@ -14,7 +14,7 @@ do $$
 declare t text;
 begin
   foreach t in array array['opportunities','contacts','call_recordings','lead_notes','lead_stage_events','lead_tasks',
-                           'followups','followup_touches','tasks','meta_insights_daily','ghl_custom_fields',
+                           'followups','followup_touches','meta_insights_daily','ghl_custom_fields',
                            'pipeline_stages','sync_log','digest_log','app_settings']
   loop
     if to_regclass('public.'||t) is not null then

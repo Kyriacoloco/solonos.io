@@ -1,4 +1,6 @@
 // engagement-send — staff clicks "Send NDA + deposit" or "Send engagement letter" in Solonos.
+// 23 Oct 2026 (Part 39): invoices of any amount with their own description; invoice_pdf / receipt can skip the email (email:false);
+//   invoice_email sends an issued invoice with the text you write; lead_nda also works on an engagement (engagement_id instead of opportunity_id).
 // 15 Oct 2026: lead_nda takes email_subject / email_text written in Solonos; the letter starts the follow-up (Part 35).
 //   POST { engagement_id, kind: "nda" | "letter" }   Authorization: Bearer <staff JWT>
 //
@@ -97,7 +99,7 @@ async function fillTemplate(db: ReturnType<typeof admin>, file: string, data: Re
 
 // ------------------------------------------------------------------ invoice + receipt PDFs (pdf-lib), approved design 13 Sep 2026
 type InvoiceRow = {
-  id: string; engagement_id: string; seq: number; amount: number; currency: string; issuing_entity: string; invoice_no: number; issued_at: string; due_at: string | null; paid_at: string | null;
+  id: string; engagement_id: string; seq: number; description?: string | null; amount: number; currency: string; issuing_entity: string; invoice_no: number; issued_at: string; due_at: string | null; paid_at: string | null;
   entity_name: string; client_name: string; client_email: string; company_name: string | null; company_address: string | null; company_country: string | null;
   company_tax_id: string | null; iban: string; swift: string; bank: string; account_name: string;
 };
@@ -112,7 +114,8 @@ const ascii = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").
 const C = { brand: rgb(0.5, 0, 0.125), accent: rgb(0.047, 0.278, 0.404), ink: rgb(0.165, 0.118, 0.125), grey: rgb(0.42, 0.33, 0.34), cream: rgb(0.953, 0.906, 0.871), line: rgb(0.86, 0.78, 0.75), on: rgb(0.98, 0.95, 0.91) };
 const fmtDay = (d: string | Date) => new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 const invNo = (i: { issuing_entity: string; invoice_no: number }) => `${i.issuing_entity}-${String(i.invoice_no).padStart(4, "0")}`;
-const descFor = (i: InvoiceRow) => i.seq === 0
+const descFor = (i: InvoiceRow) => i.description ? [i.description, ""]
+  : i.seq === 0
   ? [`Engagement deposit - business valuation${i.company_name ? ` of ${i.company_name}` : ""}`, "Non-refundable. Credited against the first instalment of the professional fee."]
   : i.seq === 1 ? ["Business valuation - first instalment (50% on signing the engagement letter)", "Less deposit already received."]
   : ["Business valuation - final instalment", "Payable before release of the final report."];
@@ -300,7 +303,7 @@ Deno.serve(async (req) => {
   const { data: isStaff } = await me.rpc("is_staff");
   const body = await req.json().catch(() => ({}));
   const { engagement_id, kind, agreement_id, invoice_id } = body;
-  if (!["invite", "nda", "letter", "stamp", "receipt", "invoice_pdf", "lead_nda"].includes(kind)) return json({ error: "kind must be invite|nda|letter|stamp|receipt|invoice_pdf|lead_nda" }, 400);
+  if (!["invite", "nda", "letter", "stamp", "receipt", "invoice_pdf", "invoice_email", "lead_nda"].includes(kind)) return json({ error: "kind must be invite|nda|letter|stamp|receipt|invoice_pdf|invoice_email|lead_nda" }, 400);
   if (!["stamp", "letter", "nda"].includes(kind) && !isStaff) return json({ error: "staff only" }, 403);
   if (["letter", "nda"].includes(kind) && !isStaff) {   // the client's portal may trigger the automatic NDA / letter for their own engagement
     const { data: mine } = await me.from("engagements").select("id").eq("id", engagement_id).maybeSingle();
@@ -354,8 +357,30 @@ Deno.serve(async (req) => {
     if (kind === "invoice_pdf") {
       const { data: cur } = await db.from("engagement_invoices").select("id, status").eq("id", invoice_id).single();
       if (cur?.status === "scheduled") await db.rpc("issue_invoice", { p_invoice: invoice_id });   // Invoice 2: number it now
-      const out = await renderInvoice(db, invoice_id, true);
-      return json({ ok: true, ...out });
+      const out = await renderInvoice(db, invoice_id, body.email !== false);
+      return json({ ok: true, pdf_path: out.pdf_path, invoice_no: out.invoice_no, emailed: body.email !== false });
+    }
+
+    // ---- invoice_email: send an issued invoice with the subject and text written in Solonos
+    if (kind === "invoice_email") {
+      const { to, subject, text } = body;
+      const { data: inv } = await db.from("invoices_view").select("*").eq("id", invoice_id).single();
+      if (!inv?.invoice_no) throw new Error("invoice is not issued yet");
+      if (!to) throw new Error("Who should get it? Enter an email");
+      let path = inv.pdf_path as string | null;
+      if (!path) path = (await renderInvoice(db, invoice_id, false)).pdf_path;
+      const [bucket, ...rest] = String(path).split("/");
+      const { data: file, error: fe } = await db.storage.from(bucket).download(rest.join("/"));
+      if (fe || !file) throw new Error("could not read the invoice PDF");
+      const pdf = new Uint8Array(await file.arrayBuffer());
+      const no = invNo(inv);
+      await sendEmail({
+        to, subject: String(subject || `Invoice ${no} - ${inv.company_name || inv.client_name}`),
+        html: shell(textToHtml(String(text || "").trim() || `Dear ${inv.client_name},\n\nPlease find attached invoice ${no}.\n\nKind regards,\nKyriacos\nConsortia Advisory`)),
+        attachments: [{ filename: `Invoice ${no}.pdf`, contentBase64: b64(pdf), contentType: "application/pdf" }],
+      });
+      await db.from("activity_log").insert({ engagement_id: inv.engagement_id, actor: "staff", action: "invoice.emailed", detail: { no, to }, visible_to_client: false });
+      return json({ ok: true, to });
     }
 
     // ---- receipt: after an invoice is marked paid
@@ -368,7 +393,7 @@ Deno.serve(async (req) => {
       await db.storage.from("invoices").upload(rpath, pdf, { contentType: "application/pdf", upsert: true });
       await db.from("engagement_invoices").update({ receipt_path: `invoices/${rpath}` }).eq("id", inv.id);
       await db.from("documents").upsert({ engagement_id: inv.engagement_id, kind: "invoice", name: `Receipt ${inv.issuing_entity}-${String(inv.invoice_no).padStart(4, "0")}`, storage_path: `invoices/${rpath}`, visibility: "client", uploaded_by: "system" }, { onConflict: "storage_path", ignoreDuplicates: true });
-      await sendEmail({
+      if (body.email !== false) await sendEmail({
         to: inv.client_email, subject: `Receipt ${inv.issuing_entity}-${String(inv.invoice_no).padStart(4, "0")} - ${inv.company_name || inv.client_name}`,
         html: shell(`<p>Dear ${inv.client_name},</p><p>We have received your payment of EUR ${money(inv.amount)} for invoice ${inv.issuing_entity}-${String(inv.invoice_no).padStart(4, "0")}. The receipt is attached and also available on your Solonos page.</p><p>Kind regards,<br>Kyriacos<br>Consortia Advisory</p>`),
         attachments: [{ filename: `Receipt ${inv.issuing_entity}-${String(inv.invoice_no).padStart(4, "0")}.pdf`, contentBase64: b64(pdf), contentType: "application/pdf" }],
@@ -380,7 +405,7 @@ Deno.serve(async (req) => {
     //      and follows the lead into the engagement on conversion.
     if (kind === "lead_nda") {
       const { opportunity_id, party_name, signatory_name, signatory_title, email, address, country, is_individual, send, email_subject, email_text } = body;
-      if (!opportunity_id) throw new Error("opportunity_id missing");
+      if (!opportunity_id && !engagement_id) throw new Error("opportunity_id or engagement_id missing");
       const miss = [!party_name && "company or person name", !address && "address", !is_individual && !country && "country", send && !email && "email"].filter(Boolean);
       if (miss.length) throw new Error(`Missing: ${miss.join(", ")}`);
       const dp = dateParts();
@@ -389,13 +414,13 @@ Deno.serve(async (req) => {
       const DOCX_T = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
       const title = `${party_name} - Non Disclosure Agreement`;
       const slug = title.replace(/[^A-Za-z0-9.]+/g, "-").replace(/^-+|-+$/g, "");
-      const base = `leads/${opportunity_id}/${Date.now()}-${slug}`;
+      const base = opportunity_id ? `leads/${opportunity_id}/${Date.now()}-${slug}` : `engagements/${engagement_id}/${Date.now()}-${slug}`;
       await db.storage.from("deliverables").upload(`${base}.docx`, bytes, { contentType: DOCX_T, upsert: true });
       const pdf = await docxToPdf(bytes, `NDA-lead-${Date.now()}.docx`);
       if (pdf) await db.storage.from("deliverables").upload(`${base}.pdf`, pdf, { contentType: "application/pdf", upsert: true });
       const storage_path = `deliverables/${base}.${pdf ? "pdf" : "docx"}`;
       const meta = { party_name, signatory_name: signatory_name || "", signatory_title: signatory_title || "", email: email || "", address, country: country || "", is_individual: !!is_individual, sent_at: send ? new Date().toISOString() : null, signed: false };
-      const { data: doc, error: de } = await db.from("documents").insert({ opportunity_id, kind: "nda", name: title, storage_path, visibility: "internal", uploaded_by: "staff", meta }).select().single();
+      const { data: doc, error: de } = await db.from("documents").insert({ opportunity_id: opportunity_id || null, engagement_id: engagement_id || null, kind: "nda", name: title, storage_path, visibility: "internal", uploaded_by: "staff", meta }).select().single();
       if (de) throw new Error(de.message);
       if (send) {
         const first = String(signatory_name || party_name).trim().split(/\s+/)[0];
