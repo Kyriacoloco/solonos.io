@@ -19,6 +19,7 @@ alter table projects drop constraint if exists projects_service_line_check;
 alter table projects add constraint projects_service_line_check check (service_line in
   ('valuation','sell_side','ma','business_plan','feasibility','financial_modeling','transfer_pricing','teaser','form_8802','restructuring','cfo','other'));
 alter table projects add column if not exists notes text;
+alter table projects alter column fee drop not null;          -- a project can start before the fee is known
 
 create or replace function engagement_type_label(t text) returns text language sql immutable as $$
   select case t
