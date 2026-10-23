@@ -232,7 +232,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.14";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.15";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -265,6 +265,16 @@ const APPROACHES = [
 ];
 
 const INVOICE_NAMES = { 0: "Deposit (€1,000)", 1: "Invoice 1 (on signing)", 2: "Invoice 2 (before final report)" };
+const invoiceName = (i) => i.description || INVOICE_NAMES[i.seq] || `Invoice ${i.seq}`;
+/** Engagement types (same list as the OneDrive project folders). Valuations keep the full funnel flow; the rest are simple. */
+const ENG_TYPES = [["valuation", "Business Valuation"], ["sell_side", "Sell-side M&A"], ["ma", "M&A"], ["business_plan", "Business Plan"], ["feasibility", "Feasibility Study"],
+  ["financial_modeling", "Financial Modelling"], ["transfer_pricing", "Transfer Pricing"], ["teaser", "Teaser"], ["form_8802", "8802 Form"], ["restructuring", "Restructuring Report"], ["cfo", "CFO Services"], ["other", "Other"]];
+const typeLabel = (t) => ENG_TYPES.find(([k]) => k === (t || "valuation"))?.[1] ?? "Other";
+const isSimple = (e) => (e?.engagement_type || "valuation") !== "valuation";
+/** Stage shown for an engagement: valuations use the funnel stages; simple engagements are Open, Project active, Completed or Declined. */
+const engStageLabel = (e) => !isSimple(e) ? stageLabel(e.stage) : e.stage === "valuation_active" ? "Project active" : ["completed", "declined"].includes(e.stage) ? stageLabel(e.stage) : "Open";
+const PROJECT_STAGES = [["data_topup", "Information"], ["draft", "Working on it"], ["internal_review", "Internal review"], ["client_review", "With the client"], ["final", "Final"], ["closed", "Closed"]];
+const projectStageLabel = (k) => PROJECT_STAGES.find(([x]) => x === k)?.[1] ?? k;
 const PORTAL_URL = window.location.origin + "/portal";
 
 const eur = (n) => new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(Number(n || 0));
@@ -1329,34 +1339,40 @@ function EmailTemplates() {
 
 /** NDA made on the lead, before any engagement. Generate it (and optionally email it), then upload the signed copy.
  *  Both follow the lead into the engagement on conversion, where the signed copy marks the NDA signed. */
-function LeadNda({ lead }) {
+function LeadNda({ lead }) { return <NdaMaker lead={lead} />; }
+
+/** The same NDA maker on a lead or on an engagement (engagement: no follow-up starts, files stay on the engagement). */
+function NdaMaker({ lead: leadIn, engagement }) {
+  const lead = leadIn ?? { ghl_id: null, company: engagement.company_name || "", first_name: engagement.client_name || "", last_name: "", email: engagement.client_email || "", country: engagement.company_country || "", name: engagement.company_name || engagement.client_name || "" };
+  const onEng = !!engagement;
   const [run, busy] = useAction();
   const [docs, setDocs] = useState([]);
   const [form, setForm] = useState(null);
   const load = useCallback(async () => {
-    const { data } = await supabase.from("documents").select("*").eq("opportunity_id", lead.ghl_id).eq("kind", "nda").order("created_at", { ascending: false });
+    const q = supabase.from("documents").select("*").eq("kind", "nda").order("created_at", { ascending: false });
+    const { data } = await (onEng ? q.eq("engagement_id", engagement.id) : q.eq("opportunity_id", lead.ghl_id));
     setDocs(data ?? []);
-  }, [lead.ghl_id]);
+  }, [onEng, engagement?.id, lead.ghl_id]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [load]);
   const last = docs.find((d) => !d.meta?.signed)?.meta;
   const openForm = () => setForm({
     is_individual: last?.is_individual ?? false,
     party_name: last?.party_name ?? (lead.company || ""),
     signatory_name: last?.signatory_name ?? [lead.first_name, lead.last_name].filter(Boolean).join(" "),
-    signatory_title: last?.signatory_title ?? "Director",
+    signatory_title: last?.signatory_title ?? (engagement?.client_title || "Director"),
     email: last?.email ?? (lead.email || ""),
-    address: last?.address ?? "",
+    address: last?.address ?? (engagement?.company_address || ""),
     country: last?.country ?? (lead.country === "CY" ? "" : (lead.country || "")),
   });
   const set = (k) => (x) => setForm({ ...form, [k]: x.target.type === "checkbox" ? x.target.checked : x.target.value });
   const [mail, setMail] = useState(null);   // the email being written
   const generate = (send, m) => run(async () => {
     const party = form.is_individual ? form.signatory_name : form.party_name;
-    await callFn("engagement-send", { kind: "lead_nda", opportunity_id: lead.ghl_id, ...form, party_name: party, send, email: m?.to ?? form.email, email_subject: m?.subject, email_text: m?.text });
+    await callFn("engagement-send", { kind: "lead_nda", ...(onEng ? { engagement_id: engagement.id } : { opportunity_id: lead.ghl_id }), ...form, party_name: party, send, email: m?.to ?? form.email, email_subject: m?.subject, email_text: m?.text });
     if (send && m?.saveTpl) { try { await saveTemplate("nda", { subject: unfill(m.subject, mail?.vars), text: unfill(m.text, mail?.vars) }); } catch (e) { /* best effort */ } }
-    if (send) { try { await rpc("followup_start", { p_opportunity: lead.ghl_id, p_kind: "call1" }); } catch (e) { console.warn("follow-up", e); } }
+    if (send && !onEng) { try { await rpc("followup_start", { p_opportunity: lead.ghl_id, p_kind: "call1" }); } catch (e) { console.warn("follow-up", e); } }
     setMail(null); setForm(null); await load();
-  }, send ? "NDA emailed. Follow-up starts next working day" : "NDA generated");
+  }, send ? (onEng ? "NDA emailed" : "NDA emailed. Follow-up starts next working day") : "NDA generated. Nothing was emailed");
   const writeMail = async () => {
     const tpl = (await loadTemplates()).nda ?? DEFAULT_TEMPLATES.nda;
     const party = form.is_individual ? form.signatory_name : form.party_name;
@@ -1367,20 +1383,20 @@ function LeadNda({ lead }) {
     const party = src?.meta?.party_name || lead.company || lead.name.split("|")[0].trim();
     const title = `${party} - Non Disclosure Agreement - signed`;
     const ext = (file.name.match(/\.[A-Za-z0-9]+$/) || [".pdf"])[0];
-    const path = `leads/${lead.ghl_id}/${Date.now()}-${title.replace(/[^A-Za-z0-9.]+/g, "-")}${ext}`;
+    const path = `${onEng ? `engagements/${engagement.id}` : `leads/${lead.ghl_id}`}/${Date.now()}-${title.replace(/[^A-Za-z0-9.]+/g, "-")}${ext}`;
     const { error } = await supabase.storage.from("deliverables").upload(path, file);
     if (error) throw new Error(error.message);
     const meta = { ...(src?.meta ?? {}), signed: true, signed_on: new Date().toISOString().slice(0, 10) };
-    const { error: e2 } = await supabase.from("documents").insert({ opportunity_id: lead.ghl_id, kind: "nda", name: title, storage_path: `deliverables/${path}`, visibility: "internal", uploaded_by: "staff", meta });
+    const { error: e2 } = await supabase.from("documents").insert({ ...(onEng ? { engagement_id: engagement.id } : { opportunity_id: lead.ghl_id }), kind: "nda", name: title, storage_path: `deliverables/${path}`, visibility: "internal", uploaded_by: "staff", meta });
     if (e2) throw new Error(e2.message);
     await load();
-  }, "Signed NDA saved on the lead"); };
+  }, onEng ? "Signed NDA saved" : "Signed NDA saved on the lead"); };
   const open = async (d) => window.open(await signedUrl(d.storage_path), "_blank");
   const hasSigned = docs.some((d) => d.meta?.signed);
   return (
     <>
-      <h3>NDA</h3>
-      {docs.length === 0 && !form && <p className="muted small" style={{ margin: "0 0 8px" }}>No NDA yet. Create one here before converting; it follows the lead into the engagement.</p>}
+      {!onEng && <h3>NDA</h3>}
+      {docs.length === 0 && !form && <p className="muted small" style={{ margin: "0 0 8px" }}>{onEng ? "No NDA yet. Generate it, then download it or email it with your own text." : "No NDA yet. Create one here before converting; it follows the lead into the engagement."}</p>}
       {docs.map((d) => (
         <div key={d.id} className="row between small" style={{ marginBottom: 6 }}>
           <span>{d.name}{d.meta?.signed ? <span style={{ color: "var(--ok)" }}> ✓</span> : null}<div className="muted">{ago(d.created_at)}{d.meta?.sent_at ? ` · emailed to ${d.meta.email}` : ""}</div></span>
@@ -1390,7 +1406,7 @@ function LeadNda({ lead }) {
           </span>
         </div>
       ))}
-      {mail && <EmailDialog title={`Send the NDA to ${mail.vars.first}`} to={mail.to} subject={mail.subject} text={mail.text} attached={`${mail.title}.pdf`} then="Follow-up starts: first touch next working day, then every 3 working days" busy={busy} onSend={(m) => generate(true, m)} onCancel={() => setMail(null)} />}
+      {mail && <EmailDialog title={`Send the NDA to ${mail.vars.first}`} to={mail.to} subject={mail.subject} text={mail.text} attached={`${mail.title}.pdf`} then={onEng ? undefined : "Follow-up starts: first touch next working day, then every 3 working days"} busy={busy} onSend={(m) => generate(true, m)} onCancel={() => setMail(null)} />}
       {!form ? (
         !hasSigned && <button className="btn" disabled={busy} onClick={openForm} style={{ marginBottom: 16 }}>{docs.length ? "Create a new NDA" : "Create NDA"}</button>
       ) : (
@@ -1580,7 +1596,7 @@ function ConvertForm({ lead, onCancel }) {
     company_country: lead.country === "CY" ? "" : (lead.country ?? ""),
     company_industry: Object.entries(c).find(([k]) => /industry/i.test(k))?.[1] ?? "",
     is_individual: false,
-    fee: "", approaches: ["dcf", "cca", "pt"],
+    fee: "", approaches: ["dcf", "cca", "pt"], type: "valuation",
   });
   const set = (k) => (x) => setF({ ...f, [k]: x.target.type === "checkbox" ? x.target.checked : x.target.value });
   const toggleA = (k) => setF((f) => ({ ...f, approaches: f.approaches.includes(k) ? f.approaches.filter((x) => x !== k) : [...f.approaches, k] }));
@@ -1604,7 +1620,7 @@ function ConvertForm({ lead, onCancel }) {
       const { error } = await supabase.from("engagements").update({
         client_title: f.client_title || null, company_name: f.is_individual ? null : (f.company_name || null),
         company_country: f.company_country || null, company_industry: f.company_industry || null, is_individual: f.is_individual,
-        fee: f.fee ? Number(f.fee) : null, approaches: f.approaches,
+        fee: f.fee ? Number(f.fee) : null, approaches: f.approaches, engagement_type: f.type,
         ...(ndaMeta?.address ? { company_address: ndaMeta.address } : {}),
       }).eq("id", e.id);
       if (error) throw new Error(error.message);
@@ -1620,6 +1636,7 @@ function ConvertForm({ lead, onCancel }) {
     <div className="stack">
       <h3>Convert to engagement</h3>
       <p className="muted small" style={{ margin: 0 }}>Only the name and email are needed. The client completes the company details on their own page; everything else follows from that.</p>
+      <Field label="Type"><select value={f.type} onChange={set("type")}>{ENG_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
       {ndaDocs.some((d) => d.meta?.signed) && <div className="note small" style={{ color: "var(--ok)" }}>✓ Signed NDA on this lead: the engagement starts with the NDA signed and the details confirmed.</div>}
       <Field label="Signatory full name (as it will appear on the NDA and letter)"><input value={f.client_name} onChange={set("client_name")} /></Field>
       <div className="grid2">
@@ -1799,7 +1816,7 @@ function Engagements() {
   const [filter, setFilter] = useState("live");
 
   useEffect(() => {
-    supabase.from("engagements").select("id, stage, client_name, client_email, company_name, company_country, fee, updated_at, created_at, sent_at, last_client_activity_at")
+    supabase.from("engagements").select("id, stage, engagement_type, client_name, client_email, company_name, company_country, fee, updated_at, created_at, sent_at, last_client_activity_at")
       .order("updated_at", { ascending: false })
       .then(({ data }) => setRows(data ?? []));
     supabase.from("engagements_quiet").select("id").then(({ data }) => setQuiet((data ?? []).map((x) => x.id)));
@@ -1807,12 +1824,15 @@ function Engagements() {
 
   const shown = (rows ?? []).filter((r) => filter === "all" ? true : filter === "live" ? LIVE_STAGES.includes(r.stage) : filter === "quiet" ? quiet.includes(r.id) : r.stage === filter);
   const counts = Object.fromEntries(ENGAGEMENT_STAGES.map((s) => [s.key, (rows ?? []).filter((r) => r.stage === s.key).length]));
+  const [adding, setAdding] = useState(false);
 
   return (
     <>
       <div className="pagehead">
-        <div><h1>Engagements</h1><p>Everyone between Call 1 and "valuation started". Click one to move it along.</p></div>
+        <div><h1>Engagements</h1><p>Every client you are talking to about work: valuations, sell-side, business plans and the rest. Click one to open it.</p></div>
+        <button className="btn primary" onClick={() => setAdding(true)}>New engagement</button>
       </div>
+      {adding && <NewEngagementForm onCancel={() => setAdding(false)} />}
       <div className="row wrap" style={{ marginBottom: 14 }}>
         <button className={`btn ${filter === "live" ? "primary" : ""}`} onClick={() => setFilter("live")}>Live</button>
         {ENGAGEMENT_STAGES.filter((s) => counts[s.key] > 0).map((s) => (
@@ -1823,16 +1843,17 @@ function Engagements() {
       </div>
       <div className="card">
         {rows === null ? null : shown.length === 0 ? (
-          <Empty title="Nothing here">Convert a lead from the Leads board to start an engagement.</Empty>
+          <Empty title="Nothing here">Click New engagement, or convert a lead from the Leads board.</Empty>
         ) : (
           <table className="table">
-            <thead><tr><th>Client</th><th>Company</th><th>Stage</th><th>Fee</th><th>Last activity</th></tr></thead>
+            <thead><tr><th>Client</th><th>Company</th><th>Type</th><th>Stage</th><th>Fee</th><th>Last activity</th></tr></thead>
             <tbody>
               {shown.map((r) => (
                 <tr key={r.id} className="click" onClick={() => nav(`/app/engagements/${r.id}`)}>
                   <td><strong>{r.client_name}</strong><div className="muted small">{r.client_email}</div></td>
                   <td>{r.company_name || "—"}<div className="muted small">{r.company_country}</div></td>
-                  <td><Chip kind={chipKind(r.stage)}>{stageLabel(r.stage)}</Chip></td>
+                  <td className="small">{typeLabel(r.engagement_type)}</td>
+                  <td><Chip kind={chipKind(r.stage)}>{engStageLabel(r)}</Chip></td>
                   <td>{r.fee ? eur(r.fee) : <span className="muted">not set</span>}</td>
                   <td className="muted">{r.last_client_activity_at ? `client ${ago(r.last_client_activity_at)}` : r.sent_at ? `sent ${ago(r.sent_at)}` : ago(r.updated_at)}</td>
                 </tr>
@@ -1842,6 +1863,38 @@ function Engagements() {
         )}
       </div>
     </>
+  );
+}
+
+/** An engagement without a lead. Nothing is emailed: you send the NDA or an invoice from the engagement when you are ready. */
+function NewEngagementForm({ onCancel }) {
+  const nav = useNavigate();
+  const [run, busy] = useAction();
+  const [f, setF] = useState({ type: "sell_side", client_name: "", client_email: "", company: "", country: "" });
+  const set = (k) => (x) => setF({ ...f, [k]: x.target.value });
+  const create = () => run(async () => {
+    const e = await rpc("staff_new_engagement", { p_type: f.type, p_client_name: f.client_name, p_client_email: f.client_email, p_company: f.company, p_country: f.country });
+    nav(`/app/engagements/${e.id}`);
+  });
+  return (
+    <Card title="New engagement" style={{ marginBottom: 16 }}>
+      <div className="stack" style={{ gap: 10 }}>
+        <Field label="Type"><select value={f.type} onChange={set("type")}>{ENG_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
+        <div className="grid2">
+          <Field label="Client full name"><input value={f.client_name} onChange={set("client_name")} autoFocus /></Field>
+          <Field label="Email"><input type="email" value={f.client_email} onChange={set("client_email")} /></Field>
+        </div>
+        <div className="grid2">
+          <Field label="Company (optional)"><input value={f.company} onChange={set("company")} /></Field>
+          <Field label="Country (optional, decides which company invoices)"><input value={f.country} onChange={set("country")} placeholder="e.g. Greece" /></Field>
+        </div>
+        <p className="muted small" style={{ margin: 0 }}>Only the name is needed. Nothing is sent to the client.</p>
+        <div className="row">
+          <button className="btn primary" disabled={busy || !f.client_name.trim()} onClick={create}>Create engagement</button>
+          <button className="btn" onClick={onCancel}>Cancel</button>
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -1861,6 +1914,145 @@ function EngagementFollowup({ e }) {
   useEffect(() => { load(); }, [load]);
   if (!lead) return null;
   return <Card title="Follow-up"><p className="muted small" style={{ margin: "0 0 10px" }}>Sent a draft and heard nothing? Start the follow-up: a touch every 3 working days, 5 in total. A client who has paid never goes to Lost; after the last touch they go Quiet and come back on your list every 30 days.</p><LeadTasks lead={lead} fu={fu} reload={load} engagement={e} /></Card>;
+}
+
+// ===================== pages/Projects.jsx =====================
+/** Every project, from any engagement. A project can start with details missing. */
+function Projects() {
+  const nav = useNavigate();
+  const [rows, setRows] = useState(null);
+  const [filter, setFilter] = useState("open");
+  useEffect(() => {
+    supabase.from("projects").select("id, code, title, service_line, stage, started_at, fee, engagement_id, engagements(client_name, company_name)")
+      .order("started_at", { ascending: false }).then(({ data }) => setRows(data ?? []));
+  }, []);
+  const shown = (rows ?? []).filter((r) => filter === "all" ? true : filter === "open" ? r.stage !== "closed" : r.stage === "closed");
+  return (
+    <>
+      <div className="pagehead">
+        <div><h1>Projects</h1><p>The work itself. Create one from any engagement with "Create project".</p></div>
+      </div>
+      <div className="row wrap" style={{ marginBottom: 14 }}>
+        {[["open", "Open"], ["closed", "Closed"], ["all", "All"]].map(([k, l]) => <button key={k} className={`btn ${filter === k ? "primary" : ""}`} onClick={() => setFilter(k)}>{l}</button>)}
+      </div>
+      <div className="card">
+        {rows === null ? null : shown.length === 0 ? <Empty title="No projects yet">Open an engagement and click Create project.</Empty> : (
+          <table className="table">
+            <thead><tr><th>Project</th><th>Client</th><th>Type</th><th>Stage</th><th>Started</th></tr></thead>
+            <tbody>
+              {shown.map((r) => (
+                <tr key={r.id} className="click" onClick={() => nav(`/app/projects/${r.id}`)}>
+                  <td><strong>{r.title}</strong><div className="muted small">{r.code}</div></td>
+                  <td>{r.engagements?.company_name || r.engagements?.client_name || "—"}{r.engagements?.company_name && <div className="muted small">{r.engagements.client_name}</div>}</td>
+                  <td className="small">{typeLabel(r.service_line)}</td>
+                  <td><Chip kind={r.stage === "closed" ? "ok" : "brand"}>{projectStageLabel(r.stage)}</Chip></td>
+                  <td className="muted">{day(r.started_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
+  );
+}
+
+function ProjectDetail() {
+  const { id } = useParams();
+  const [run, busy] = useAction();
+  const [p, setP] = useState(null);
+  const [e, setE] = useState(null);
+  const [tasks, setTasks] = useState([]);
+  const [team, setTeam] = useState([]);
+  const [edit, setEdit] = useState(null);       // { title, notes, fee }
+  const [nt, setNt] = useState({ title: "", assignee_id: "", due: "" });
+  const load = useCallback(async () => {
+    const { data: pr } = await supabase.from("projects").select("*").eq("id", id).single();
+    setP(pr);
+    if (pr?.engagement_id) {
+      const { data: en } = await supabase.from("engagements").select("id, client_name, client_email, company_name, engagement_type, onedrive_url").eq("id", pr.engagement_id).maybeSingle();
+      setE(en);
+    }
+    const { data: t } = await supabase.from("tasks").select("*").eq("project_id", id).order("created_at");
+    setTasks(t ?? []);
+  }, [id]);
+  useEffect(() => { load(); supabase.from("staff").select("user_id, full_name").then(({ data }) => setTeam(data ?? [])); }, [load]);
+  if (!p) return null;
+  const save = (patch, msg = "Saved") => run(async () => { const { error } = await supabase.from("projects").update(patch).eq("id", p.id); if (error) throw new Error(error.message); await load(); }, msg);
+  const addTask = () => run(async () => {
+    const { error } = await supabase.from("tasks").insert({ project_id: p.id, title: nt.title.trim(), assignee_id: nt.assignee_id || null, due_at: nt.due ? `${nt.due}T17:00:00` : null });
+    if (error) throw new Error(error.message);
+    setNt({ title: "", assignee_id: nt.assignee_id, due: "" }); await load();
+  });
+  const toggle = (t) => run(async () => { const { error } = await supabase.from("tasks").update({ status: t.status === "done" ? "todo" : "done" }).eq("id", t.id); if (error) throw new Error(error.message); await load(); });
+  const remove = (t) => run(async () => { const { error } = await supabase.from("tasks").delete().eq("id", t.id); if (error) throw new Error(error.message); await load(); }, "Task removed");
+  const who = (uid) => team.find((m) => m.user_id === uid)?.full_name ?? "";
+  const open = tasks.filter((t) => t.status !== "done"), done = tasks.filter((t) => t.status === "done");
+  const taskRow = (t) => (
+    <div key={t.id} className="row between small" style={{ gap: 8 }}>
+      <label className="check" style={{ flex: 1, minWidth: 0 }}><input type="checkbox" checked={t.status === "done"} onChange={() => toggle(t)} /><span style={{ textDecoration: t.status === "done" ? "line-through" : "none" }}>{t.title}</span></label>
+      <span className="muted" style={{ flex: "none" }}>{[who(t.assignee_id), t.due_at && day(t.due_at)].filter(Boolean).join(" · ")}</span>
+      <button className="btn" disabled={busy} onClick={() => remove(t)} title="Remove task">✕</button>
+    </div>
+  );
+  return (
+    <>
+      <div className="pagehead">
+        <div>
+          <div className="muted small"><Link to="/app/projects">Projects</Link> / {p.code}</div>
+          <h1>{p.title}</h1>
+          <p>{typeLabel(p.service_line)}{e ? ` · ${e.client_name}${e.company_name ? `, ${e.company_name}` : ""}` : ""}</p>
+        </div>
+        <div className="row">
+          {e?.onedrive_url && <a className="btn" href={e.onedrive_url} target="_blank" rel="noreferrer">OneDrive folder</a>}
+          {e && <Link className="btn" to={`/app/engagements/${e.id}`}>Engagement (NDA, invoices, files)</Link>}
+          <select value={p.stage} disabled={busy} onChange={(x) => save({ stage: x.target.value, ...(x.target.value === "closed" ? { closed_at: new Date().toISOString() } : {}) }, "Stage updated")}>
+            {PROJECT_STAGES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="grid2">
+        <div className="stack" style={{ gap: 16 }}>
+          <Card title={`Tasks · ${open.length} open`}>
+            <div className="stack" style={{ gap: 8 }}>
+              {tasks.length === 0 && <span className="muted small">No tasks yet. Add the first one below.</span>}
+              {open.map(taskRow)}
+              {done.length > 0 && <div className="muted small" style={{ marginTop: 6 }}>Done</div>}
+              {done.map(taskRow)}
+              <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
+                <input style={{ flex: 1, minWidth: 180 }} value={nt.title} onChange={(x) => setNt({ ...nt, title: x.target.value })} onKeyDown={(x) => x.key === "Enter" && nt.title.trim() && addTask()} placeholder="New task, e.g. Prepare teaser" />
+                <select value={nt.assignee_id} onChange={(x) => setNt({ ...nt, assignee_id: x.target.value })}><option value="">Anyone</option>{team.map((m) => <option key={m.user_id} value={m.user_id}>{m.full_name}</option>)}</select>
+                <input type="date" value={nt.due} onChange={(x) => setNt({ ...nt, due: x.target.value })} />
+                <button className="btn primary" disabled={busy || !nt.title.trim()} onClick={addTask}>Add</button>
+              </div>
+            </div>
+          </Card>
+        </div>
+        <div className="stack" style={{ gap: 16 }}>
+          <Card title="Details" right={!edit && <button className="btn" onClick={() => setEdit({ title: p.title ?? "", notes: p.notes ?? "", fee: p.fee ?? "" })}>Edit</button>}>
+            {edit ? (
+              <div className="stack" style={{ gap: 10 }}>
+                <Field label="Project name"><input value={edit.title} onChange={(x) => setEdit({ ...edit, title: x.target.value })} /></Field>
+                <Field label="Fee (optional)"><input type="number" min="0" step="100" value={edit.fee} onChange={(x) => setEdit({ ...edit, fee: x.target.value })} /></Field>
+                <Field label="Notes"><textarea rows={6} value={edit.notes} onChange={(x) => setEdit({ ...edit, notes: x.target.value })} placeholder="Scope, what is missing, who to speak to…" /></Field>
+                <div className="row">
+                  <button className="btn primary" disabled={busy || !edit.title.trim()} onClick={() => save({ title: edit.title.trim(), notes: edit.notes, fee: edit.fee === "" ? null : Number(edit.fee) }).then((ok) => ok && setEdit(null))}>Save</button>
+                  <button className="btn" onClick={() => setEdit(null)}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <div className="stack small" style={{ gap: 6 }}>
+                <div><span className="muted">Code</span> {p.code}</div>
+                <div><span className="muted">Started</span> {day(p.started_at)}</div>
+                <div><span className="muted">Fee</span> {p.fee ? eur(p.fee) : "not set"}</div>
+                <div style={{ whiteSpace: "pre-wrap" }}><span className="muted">Notes</span> {p.notes || "none"}</div>
+              </div>
+            )}
+          </Card>
+        </div>
+      </div>
+    </>
+  );
 }
 
 /** The OneDrive page: a live window into the Consortia OneDrive and the Common library. Click a folder to go in, a file to open it in OneDrive. */
@@ -2000,8 +2192,10 @@ function EngagementDetail() {
   const [agreements, setAgreements] = useState([]);
   const [feed, setFeed] = useState([]);
   const [contact, setContact] = useState(null);
+  const [project, setProject] = useState(undefined);
 
   const load = useCallback(async () => {
+    supabase.from("projects").select("id, code, title").eq("engagement_id", id).order("started_at").limit(1).maybeSingle().then(({ data }) => setProject(data ?? null));
     const [a, b, c, d, f, g] = await Promise.all([
       supabase.from("engagements").select("*").eq("id", id).single(),
       supabase.from("deposits").select("*").eq("engagement_id", id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
@@ -2019,6 +2213,7 @@ function EngagementDetail() {
   useEffect(() => { load(); }, [load]);
 
   if (!e) return null;
+  if (isSimple(e)) return <SimpleEngagement e={e} invoices={invoices} feed={feed} contact={contact} project={project} reload={load} />;
   const idx = stageIndex(e.stage);
   const st = ENGAGEMENT_STAGES[idx];
   const canDecline = !["engaged", "valuation_active", "completed", "declined"].includes(e.stage);
@@ -2032,6 +2227,7 @@ function EngagementDetail() {
           <p>{e.client_name}{e.client_title ? `, ${e.client_title}` : ""} · {e.client_email}</p>
         </div>
         <div className="row">
+          <ProjectButton e={e} project={project} />
           <a className="btn" href={`${PORTAL_URL}?as=${e.id}`} target="_blank" rel="noreferrer">Preview client's page</a>
           <Chip kind={e.stage === "declined" ? "danger" : e.stage === "completed" ? "ok" : "brand"}>{stageLabel(e.stage)}</Chip>
         </div>
@@ -2066,6 +2262,148 @@ function EngagementDetail() {
         </div>
       </div>
     </>
+  );
+}
+
+/** "Create project" any time (details can be missing), or "Open project" once there is one. */
+function ProjectButton({ e, project }) {
+  const nav = useNavigate();
+  const [run, busy] = useAction();
+  if (project === undefined) return null;
+  if (project) return <Link className="btn primary" to={`/app/projects/${project.id}`}>Open project {project.code}</Link>;
+  return <button className="btn primary" disabled={busy} onClick={() => run(async () => { const p = await rpc("staff_create_project", { p_engagement: e.id }); nav(`/app/projects/${p.id}`); }, "Project created")}>Create project</button>;
+}
+
+/** Any engagement that is not a valuation: NDA, files, invoices, notes. Nothing goes to the client unless you press a send button. */
+function SimpleEngagement({ e, invoices, feed, contact, project, reload }) {
+  const canDecline = !["completed", "declined"].includes(e.stage);
+  return (
+    <>
+      <div className="pagehead">
+        <div>
+          <div className="muted small"><Link to="/app/engagements">Engagements</Link> / {e.company_name || e.client_name}</div>
+          <h1>{e.company_name || e.client_name}</h1>
+          <p>{typeLabel(e.engagement_type)} · {e.client_name}{e.client_email ? ` · ${e.client_email}` : ""}</p>
+        </div>
+        <div className="row">
+          <ProjectButton e={e} project={project} />
+          <Chip kind={e.stage === "declined" ? "danger" : e.stage === "completed" ? "ok" : "brand"}>{engStageLabel(e)}</Chip>
+        </div>
+      </div>
+      <div className="grid2">
+        <div className="stack" style={{ gap: 16 }}>
+          <Card title="NDA"><NdaMaker engagement={e} /></Card>
+          <SimpleInvoices e={e} invoices={invoices} reload={reload} />
+          <EngagementFiles e={e} />
+          {canDecline && <DeclineBox e={e} reload={reload} />}
+        </div>
+        <div className="stack" style={{ gap: 16 }}>
+          <ClientDetails e={e} reload={reload} />
+          <OneDriveCard e={e} reload={reload} />
+          <NotesCard e={e} contact={contact} reload={reload} />
+          <Card title="Activity">
+            {feed.length === 0 ? <span className="muted small">Nothing yet.</span> : (
+              <ul className="feed">{feed.map((f) => <li key={f.id}><span className="when">{ago(f.created_at)}</span><span>{describe(f, e.client_name)}</span></li>)}</ul>
+            )}
+          </Card>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** Files kept on the engagement (internal; they also go to the OneDrive folder on the next sync). */
+function EngagementFiles({ e }) {
+  const [run, busy] = useAction();
+  const [rows, setRows] = useState([]);
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("documents").select("id, name, kind, storage_path, created_at").eq("engagement_id", e.id).not("kind", "in", "(nda,invoice)").order("created_at", { ascending: false });
+    setRows(data ?? []);
+  }, [e.id]);
+  useEffect(() => { load(); }, [load]);
+  const open = async (path) => window.open(await signedUrl(path), "_blank");
+  const upload = (files) => run(async () => {
+    for (const file of [...files]) {
+      if (file.size > 50 * 1024 * 1024) throw new Error(`${file.name} is over 50 MB`);
+      const path = `${e.id}/${Date.now()}-${file.name}`;
+      const { error } = await supabase.storage.from("deliverables").upload(path, file);
+      if (error) throw new Error(error.message);
+      const { error: e2 } = await supabase.from("documents").insert({ engagement_id: e.id, kind: "other", name: file.name.replace(/\.[^.]+$/, ""), storage_path: `deliverables/${path}`, visibility: "internal", uploaded_by: "staff" });
+      if (e2) throw new Error(e2.message);
+    }
+    await load();
+  }, "Saved");
+  return (
+    <Card title="Files">
+      <div className="stack" style={{ gap: 6 }}>
+        {rows.length === 0 && <span className="muted small">No files yet.</span>}
+        {rows.map((d) => <div key={d.id} className="row between small"><span>{d.name}<div className="muted">{ago(d.created_at)}</div></span><button className="btn" onClick={() => open(d.storage_path)}>Open</button></div>)}
+        <DropZone busy={busy} onFiles={upload} label="Drop files here or click to choose" />
+        <span className="muted small">Kept inside Solonos only. The client does not see them.</span>
+      </div>
+    </Card>
+  );
+}
+
+/** Invoices of any amount. Creating one makes the PDF only; you email it yourself with your own text. */
+function SimpleInvoices({ e, invoices, reload }) {
+  const [run, busy] = useAction();
+  const [form, setForm] = useState(null);
+  const [mail, setMail] = useState(null);
+  const create = () => run(async () => {
+    const inv = await rpc("staff_add_invoice", { p_engagement: e.id, p_amount: Number(form.amount), p_description: form.description, p_currency: form.currency });
+    await callFn("engagement-send", { kind: "invoice_pdf", invoice_id: inv.id, email: false });
+    setForm(null); await reload();
+  }, "Invoice created. Nothing was emailed");
+  const open = async (path) => window.open(await signedUrl(path), "_blank");
+  const paid = (i) => run(async () => { await rpc("staff_mark_invoice_paid", { p_invoice: i.id }); await reload(); }, "Marked paid");
+  const receipt = (i) => run(() => callFn("engagement-send", { kind: "receipt", invoice_id: i.id, email: false }).then(reload), "Receipt created. Nothing was emailed");
+  const no = (i) => (i.invoice_no ? `${i.issuing_entity}-${String(i.invoice_no).padStart(4, "0")}` : "");
+  const write = (i) => {
+    const first = String(e.client_name || "").trim().split(/\s+/)[0];
+    setMail({ inv: i, to: e.client_email || "", subject: `Invoice ${no(i)} - ${e.company_name || e.client_name}`,
+      text: `Dear ${first},\n\nPlease find attached invoice ${no(i)} for ${money(i.amount, i.currency)}: ${invoiceName(i)}. The bank details are on the invoice.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory` });
+  };
+  const send = (m) => run(async () => { await callFn("engagement-send", { kind: "invoice_email", invoice_id: mail.inv.id, to: m.to, subject: m.subject, text: m.text }); setMail(null); await reload(); }, "Invoice emailed");
+  return (
+    <Card title="Invoices" right={!form && <button className="btn" onClick={() => setForm({ description: `${typeLabel(e.engagement_type)}${e.company_name ? ` - ${e.company_name}` : ""}`, amount: "", currency: "EUR" })}>New invoice</button>}>
+      {form && (
+        <div className="card" style={{ padding: 12, background: "var(--sunken)", marginBottom: 12 }}>
+          <div className="stack" style={{ gap: 10 }}>
+            <Field label="What it is for (shown on the invoice)"><input value={form.description} onChange={(x) => setForm({ ...form, description: x.target.value })} /></Field>
+            <div className="grid2">
+              <Field label="Amount (no VAT)"><input type="number" min="0" step="50" value={form.amount} onChange={(x) => setForm({ ...form, amount: x.target.value })} placeholder="e.g. 2500" /></Field>
+              <Field label="Currency"><select value={form.currency} onChange={(x) => setForm({ ...form, currency: x.target.value })}><option>EUR</option><option>GBP</option></select></Field>
+            </div>
+            <p className="muted small" style={{ margin: 0 }}>Issued by {e.company_country ? entityFor(e.company_country) : "Consortia Advisory LLP (UK), since no country is set. Add the country in Client details first if the client is in the UK"}. The invoice gets its number now. Nothing is emailed.</p>
+            <div className="row">
+              <button className="btn primary" disabled={busy || !(Number(form.amount) > 0) || !form.description.trim()} onClick={create}>Create invoice</button>
+              <button className="btn" onClick={() => setForm(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {invoices.length === 0 ? !form && <span className="muted small">No invoices.</span> : (
+        <table className="table"><tbody>
+          {invoices.map((i) => (
+            <tr key={i.id}>
+              <td><div>{invoiceName(i)}</div><div className="muted small">{no(i) || "not issued"}{i.due_at && ` · due ${day(i.due_at)}`}</div></td>
+              <td style={{ textAlign: "right" }}>{money(i.amount, i.currency)}</td>
+              <td style={{ textAlign: "right" }}>
+                <span className="row" style={{ justifyContent: "flex-end" }}>
+                  {i.pdf_path && <button className="btn" onClick={() => open(i.pdf_path)}>PDF</button>}
+                  {i.invoice_no && i.status !== "void" && <button className="btn" disabled={busy} onClick={() => write(i)}>Email…</button>}
+                  {i.receipt_path && <button className="btn" onClick={() => open(i.receipt_path)}>Receipt</button>}
+                  {i.status === "paid" && !i.receipt_path && <button className="btn" disabled={busy} onClick={() => receipt(i)}>Create receipt</button>}
+                  {i.status === "issued" ? <button className="btn" disabled={busy} onClick={() => paid(i)}>Mark paid</button> : <Chip kind={i.status === "paid" ? "ok" : ""}>{i.status}</Chip>}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody></table>
+      )}
+      {mail && <EmailDialog title={`Email invoice ${no(mail.inv)}`} to={mail.to} subject={mail.subject} text={mail.text} attached={`Invoice ${no(mail.inv)}.pdf`} busy={busy} onSend={send} onCancel={() => setMail(null)} />}
+    </Card>
   );
 }
 
@@ -2106,7 +2444,7 @@ function NextStep({ e, st, deposit, docs, invoices, agreements, reload }) {
           Letter signed, Invoice 1 issued (right). When the transfer lands, mark it paid there, then start the valuation.
         </p>
       );
-      case "valuation_active": return <p className="small" style={{ margin: 0 }}>Project created. The Projects screen arrives in the next slice.</p>;
+      case "valuation_active": return <p className="small" style={{ margin: 0 }}>Project created. Open it from the button at the top.</p>;
       case "completed": return <p className="small" style={{ margin: 0 }}>Done. Invoice 2 paid, final report delivered.</p>;
       case "declined": return <p className="small" style={{ margin: 0 }}>Declined{e.declined_reason ? `: ${e.declined_reason}` : ""}. Deposit kept.</p>;
       default: return null;
@@ -2539,7 +2877,7 @@ function ClientDetails({ e, reload }) {
   const [run, busy] = useAction();
   const [edit, setEdit] = useState(false);
   const [f, setF] = useState({});
-  const start = () => { setF({ client_name: e.client_name, client_title: e.client_title ?? "", client_email: e.client_email, company_name: e.company_name ?? "", company_address: e.company_address ?? "", company_country: e.company_country ?? "", company_tax_id: e.company_tax_id ?? "", company_industry: e.company_industry ?? "", is_individual: e.is_individual }); setEdit(true); };
+  const start = () => { setF({ client_name: e.client_name, client_title: e.client_title ?? "", client_email: e.client_email, company_name: e.company_name ?? "", company_address: e.company_address ?? "", company_country: e.company_country ?? "", company_tax_id: e.company_tax_id ?? "", company_industry: e.company_industry ?? "", is_individual: e.is_individual, engagement_type: e.engagement_type || "valuation" }); setEdit(true); };
   const save = () => run(async () => {
     const { error } = await supabase.from("engagements").update(f).eq("id", e.id);
     if (error) throw new Error(error.message);
@@ -2550,6 +2888,7 @@ function ClientDetails({ e, reload }) {
   if (edit) return (
     <Card title="Client details" right={<div className="row"><button className="btn" onClick={() => setEdit(false)}>Cancel</button><button className="btn primary" disabled={busy} onClick={save}>Save</button></div>}>
       <div className="stack">
+        <Field label="Type of engagement"><select value={f.engagement_type} onChange={set("engagement_type")}>{ENG_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
         <Field label="Signatory name"><input value={f.client_name} onChange={set("client_name")} /></Field>
         <div className="grid2">
           <Field label="Title (e.g. Director)"><input value={f.client_title} onChange={set("client_title")} /></Field>
@@ -2679,7 +3018,7 @@ function Invoices({ invoices, reload }) {
             {invoices.map((i) => (
               <tr key={i.id}>
                 <td>
-                  <div>{INVOICE_NAMES[i.seq]}</div>
+                  <div>{invoiceName(i)}</div>
                   <div className="muted small">{i.invoice_no ? `${i.issuing_entity}-${String(i.invoice_no).padStart(4, "0")}` : "not yet issued"}{i.due_at && ` · due ${day(i.due_at)}`}</div>
                   {i.client_claimed_at && i.status === "issued" && <div className="small" style={{ color: "var(--accent)", fontWeight: 600 }}>Client reports payment {ago(i.client_claimed_at)}{i.client_reference && ` · ref ${i.client_reference}`}. Check the bank, then Mark paid.</div>}
                 </td>
@@ -2707,7 +3046,8 @@ function Invoices({ invoices, reload }) {
 function describe(f, who = "Client") {
   const d = f.detail ?? {};
   switch (f.action) {
-    case "engagement.created": return "Engagement created from lead";
+    case "engagement.created": return d.manual ? `Engagement created (${typeLabel(d.type)})` : "Engagement created from lead";
+    case "invoice.emailed": return `Invoice ${d.no} emailed to ${d.to}`;
     case "engagement.stage": return `Moved to ${stageLabel(d.to)}`;
     case "deposit.link_created": return "Stripe deposit link created";
     case "invite.sent": return `Invitation emailed${d.deposit ? " with the deposit invoice" : ""}`;
@@ -3599,7 +3939,7 @@ const NAV = [
   ["Engagements", "/app/engagements"],
   ["Valuation Builder", "/app/valuation-builder"],
   ["Clients", "/app/clients", 5],
-  ["Projects", "/app/projects", 4],
+  ["Projects", "/app/projects"],
   ["Documents", "/app/documents", 5],
   ["Time", "/app/time", 4],
   ["Invoices", "/app/invoices", 3],
@@ -3645,7 +3985,7 @@ function Shell({ session, staff, signOut }) {
         <button className="burger" aria-label={menu ? "Close menu" : "Open menu"} aria-expanded={menu} onClick={() => setMenu((m) => !m)}>{menu ? "✕" : "☰"}</button>
         <div className="menu">
         <Bell />
-        {limited ? <NavLink to="/app/engagements" className={({ isActive }) => (isActive ? "active" : "")}>Projects</NavLink> : <>
+        {limited ? <NavLink to="/app/projects" className={({ isActive }) => (isActive ? "active" : "")}>Projects</NavLink> : <>
         <a href="/app/engagements" title="Open an engagement and click 'Preview client's page'">Client portal <span className="soon">via engagement</span></a>
         {NAV.filter(([, , , role]) => !role || staff?.role === role).map(([label, to, slice]) => (
           <NavLink key={to} to={to} className={({ isActive }) => (isActive ? "active" : "")}>
@@ -3665,9 +4005,10 @@ function Shell({ session, staff, signOut }) {
       <main className="main">
         {limited ? (
         <Routes>
-          <Route path="/app/engagements" element={<Engagements />} />
+          <Route path="/app/projects" element={<Projects />} />
+          <Route path="/app/projects/:id" element={<ProjectDetail />} />
           <Route path="/app/engagements/:id" element={<EngagementDetail />} />
-          <Route path="*" element={<Navigate to="/app/engagements" replace />} />
+          <Route path="*" element={<Navigate to="/app/projects" replace />} />
         </Routes>
         ) : (
         <Routes>
@@ -3679,6 +4020,8 @@ function Shell({ session, staff, signOut }) {
           <Route path="/app/valuation-builder" element={<ValuationBuilder />} />
           <Route path="/app/settings" element={<Settings />} />
           <Route path="/app/tasks" element={<Tasks />} />
+          <Route path="/app/projects" element={<Projects />} />
+          <Route path="/app/projects/:id" element={<ProjectDetail />} />
           <Route path="/app/onedrive" element={staff?.role === "partner" ? <OneDrivePage /> : <Navigate to="/app/leads" replace />} />
           <Route path="/app/*" element={<Soon />} />
           <Route path="*" element={<Navigate to="/app/leads" replace />} />
