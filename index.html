@@ -232,7 +232,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.11";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.12";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -1863,6 +1863,64 @@ function EngagementFollowup({ e }) {
   return <Card title="Follow-up"><p className="muted small" style={{ margin: "0 0 10px" }}>Sent a draft and heard nothing? Start the follow-up: a touch every 3 working days, 5 in total. A client who has paid never goes to Lost; after the last touch they go Quiet and come back on your list every 30 days.</p><LeadTasks lead={lead} fu={fu} reload={load} engagement={e} /></Card>;
 }
 
+/** The client's folder in Common / Projects / <type> / <client>, and the two-way "Sync now". */
+function OneDriveCard({ e, reload }) {
+  const [run, busy] = useAction();
+  const toast = useToast();
+  const [cfg, setCfg] = useState(null);
+  const [form, setForm] = useState(null);   // { category_id, name } while creating
+  const open = async () => {
+    let c = cfg;
+    if (!c) { const { data } = await supabase.from("app_settings").select("value").eq("key", "onedrive").maybeSingle(); c = data?.value ?? null; }
+    if (!c) c = await callFn("onedrive", { action: "discover" });
+    setCfg(c);
+    const val = (c.categories ?? []).find((x) => /valuation/i.test(x.name)) ?? (c.categories ?? [])[0];
+    setForm({ category_id: val?.id ?? "", name: e.company_name || e.client_name || "" });
+  };
+  const refresh = () => run(async () => { const c = await callFn("onedrive", { action: "discover" }); setCfg(c); }, "Folder list refreshed");
+  const report = (r) => { const parts = [`${r.uploaded ?? 0} up to OneDrive`, `${r.downloaded ?? 0} down to Solonos`]; toast(`Synced: ${parts.join(", ")}${r.errors?.length ? `, ${r.errors.length} failed` : ""}`, r.errors?.length ? "error" : "ok"); if (r.errors?.length) console.warn("onedrive", r.errors); };
+  const create = () => run(async () => {
+    if (!form.category_id) throw new Error("Pick the type of project");
+    const r = await callFn("onedrive", { action: "create", engagement_id: e.id, category_id: form.category_id, name: form.name });
+    setForm(null); report(r); await reload();
+  });
+  const sync = () => run(async () => { const r = await callFn("onedrive", { action: "sync", engagement_id: e.id }); report(r); await reload(); });
+  return (
+    <Card title="OneDrive" right={e.onedrive_url ? <a className="btn" href={e.onedrive_url} target="_blank" rel="noreferrer">Open folder</a> : null}>
+      {e.onedrive_folder_id ? (
+        <>
+          <div className="small" style={{ marginBottom: 8 }}>{e.onedrive_path}</div>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn primary" disabled={busy} onClick={sync}>{busy ? "Syncing…" : "Sync now"}</button>
+            <span className="muted small">{e.onedrive_synced_at ? `last sync ${ago(e.onedrive_synced_at)}` : "never synced"}</span>
+          </div>
+          <p className="muted small" style={{ margin: "8px 0 0" }}>New Solonos files (NDA, letter, uploads, invoices, Valuation Builder) go up to OneDrive; files you add in the OneDrive folders come into Solonos. Nothing is deleted on either side.</p>
+        </>
+      ) : !form ? (
+        <>
+          <p className="muted small" style={{ margin: "0 0 8px" }}>No folder yet. Create one in Common / Projects and keep it in sync with this engagement.</p>
+          <button className="btn" disabled={busy} onClick={() => run(open)}>Create OneDrive folder</button>
+        </>
+      ) : (
+        <div className="stack" style={{ gap: 10 }}>
+          <Field label="Type of project (folder in Common / Projects)">
+            <select value={form.category_id} onChange={(x) => setForm({ ...form, category_id: x.target.value })}>
+              {(cfg?.categories ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Folder name"><input value={form.name} onChange={(x) => setForm({ ...form, name: x.target.value })} /></Field>
+          <div className="muted small">Creates Common / Projects / {(cfg?.categories ?? []).find((c) => c.id === form.category_id)?.name ?? "…"} / {form.name || "…"} with folders 01 NDA & Letter, 02 Financials, 03 Valuation Builder, 04 Drafts, 05 Final report, 06 Invoices, 07 Other. If a folder with that name already exists, it is used.</div>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn primary" disabled={busy || !form.category_id || !form.name.trim()} onClick={create}>{busy ? "Creating…" : "Create and sync"}</button>
+            <button className="btn" disabled={busy} onClick={() => setForm(null)}>Cancel</button>
+            <button className="btn" disabled={busy} onClick={refresh} title="If you added a new type folder in OneDrive">Refresh list</button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function EngagementDetail() {
   const { id } = useParams();
   const [e, setE] = useState(null);
@@ -1921,6 +1979,7 @@ function EngagementDetail() {
         </div>
         <div className="stack" style={{ gap: 16 }}>
           <ClientDetails e={e} reload={load} />
+          <OneDriveCard e={e} reload={load} />
           <NotesCard e={e} contact={contact} reload={load} />
           {e.deposit_required ? <DepositCard e={e} deposit={deposit} reload={load} /> : <RequestDepositCard e={e} reload={load} />}
           {e.opportunity_id && !["engaged", "valuation_active", "completed", "declined"].includes(e.stage) && <EngagementFollowup e={e} />}
