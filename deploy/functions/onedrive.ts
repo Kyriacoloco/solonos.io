@@ -9,6 +9,10 @@
 //   POST { action: "sync", engagement_id }                        Solonos -> OneDrive for new Solonos files, OneDrive -> Solonos for new OneDrive files
 //   POST { action: "roots" | "browse" | "search" | "upload" | "mkdir" }  the OneDrive page in Solonos (partner only)
 //   POST { action: "sync_all" } with header x-push-secret         every 15 minutes from Supabase Cron: syncs every linked engagement
+//   POST { action: "dataroom", engagement_id }                  makes "Data Room" + the template folders inside the project folder
+//   POST { action: "share_dataroom", engagement_id, email, message }  Microsoft invites that email to the Data Room folder (can edit)
+// Version 1.3 (23 Oct 2026): data room (template folders, shared with the client through Microsoft); the sync no longer copies
+//   anything from the Data Room down to Solonos, and skips OneDrive files over 20 MB.
 // Version 1.2 (23 Oct 2026): browse / upload / mkdir with engagement_id work for any staff, but only inside that project's folder
 //   (the OneDrive tab on a project). The whole-OneDrive page stays partner only.
 // Version 1.1 (23 Oct 2026): OneDrive page (live browse, search, upload, new folder) and automatic sync. 1.0: engagement folders.
@@ -19,6 +23,11 @@ const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: 
 const G = "https://graph.microsoft.com/v1.0";
 
 // The folders made inside every client folder, and where each kind of Solonos file goes.
+// Data room folders by project type (you can add, rename or delete folders in OneDrive afterwards)
+const DATAROOM = "Data Room";
+const ROOM_SELL = ["1 Advisory Reports", "2 Corporate Documents", "3 Due Diligence Materials", "4 Financial Documents", "5 Legal Documents", "6 Marketing Materials", "7 Operational Information", "8 Transaction Process Documents"];
+const ROOM_BASIC = ["1 Financial Statements", "2 Management Accounts", "3 Budget & Forecast", "4 Corporate & Legal", "5 Contracts", "6 Other"];
+const roomFor = (t: string) => (["sell_side", "ma"].includes(t) ? ROOM_SELL : ROOM_BASIC);
 const SUB = { nda: "01 NDA & Letter", fin: "02 Financials", vb: "03 Valuation Builder", draft: "04 Drafts", final: "05 Final report", inv: "06 Invoices", other: "07 Other" };
 const kindToSub: Record<string, string> = {
   nda: SUB.nda, engagement_letter: SUB.nda, client_upload: SUB.fin, valuation_builder: SUB.vb,
@@ -139,6 +148,34 @@ Deno.serve(async (req) => {
       return json({ ok: true, url: folder.webUrl, path: `Common / Projects / ${cat.name} / ${folder.name}`, ...r });
     }
 
+    if (body.action === "dataroom") {
+      if (!e.onedrive_folder_id) throw new Error("Create the project's OneDrive folder first");
+      const room: any = await ensureFolder(e.onedrive_drive_id, e.onedrive_folder_id, DATAROOM);
+      for (const n of roomFor(e.engagement_type)) await ensureFolder(e.onedrive_drive_id, room.id, n);
+      await db.from("engagements").update({ dataroom_folder_id: room.id, dataroom_url: room.webUrl }).eq("id", e.id);
+      return json({ ok: true, url: room.webUrl, folders: roomFor(e.engagement_type) });
+    }
+
+    if (body.action === "share_dataroom") {
+      if (!e.dataroom_folder_id) throw new Error("Create the data room first");
+      const email = String(body.email || "").trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error("Enter the client's email");
+      try {
+        await g(`/drives/${e.onedrive_drive_id}/items/${e.dataroom_folder_id}/invite`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ recipients: [{ email }], roles: ["write"], requireSignIn: true, sendInvitation: true, message: String(body.message || "").slice(0, 2000) || undefined }),
+        });
+      } catch (err) {
+        const m = String(err);
+        if (/sharing|external|guest|policy|notAllowed|accessDenied/i.test(m)) throw new Error("Microsoft refused to share outside Consortia. Turn on external sharing for the Common library (SharePoint admin, Sharing: New and existing guests), then try again.");
+        throw err;
+      }
+      const list = [...(Array.isArray(e.dataroom_shared) ? e.dataroom_shared : []).filter((x: any) => x?.email !== email), { email, at: new Date().toISOString() }];
+      await db.from("engagements").update({ dataroom_shared: list }).eq("id", e.id);
+      await db.from("activity_log").insert({ engagement_id: e.id, actor: "staff", action: "dataroom.shared", detail: { email }, visible_to_client: true });
+      return json({ ok: true, shared: list });
+    }
+
     if (body.action === "sync") {
       if (!e.onedrive_folder_id) throw new Error("Create the OneDrive folder first");
       return json({ ok: true, ...(await sync(db, e)) });
@@ -240,8 +277,9 @@ async function sync(db: any, e: any) {
 
   // ---- files you added in OneDrive (any subfolder, one level deep)
   for (const [subName, sid] of subs) {
+    if (subName === DATAROOM) continue;                 // the data room stays in OneDrive only (many, big files)
     for (const c of await children(drive, sid)) {
-      if (!c.file || known.has(c.id)) continue;
+      if (!c.file || known.has(c.id) || (c.size ?? 0) > 20 * 1024 * 1024) continue;
       try {
         const r = await fetch(`${G}/drives/${drive}/items/${c.id}/content`, { headers: { Authorization: `Bearer ${await graphToken()}` } });
         if (!r.ok) throw new Error(`download ${r.status}`);
