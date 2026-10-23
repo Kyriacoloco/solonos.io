@@ -7,7 +7,9 @@
 //   POST { action: "discover" }                                   finds Common / Projects and lists its category folders
 //   POST { action: "create", engagement_id, category_id, name }   creates (or reuses) the client folder + subfolders, then syncs
 //   POST { action: "sync", engagement_id }                        Solonos -> OneDrive for new Solonos files, OneDrive -> Solonos for new OneDrive files
-// Version 1.0 (23 Oct 2026)
+//   POST { action: "roots" | "browse" | "search" | "upload" | "mkdir" }  the OneDrive page in Solonos (partner only)
+//   POST { action: "sync_all" } with header x-push-secret         every 15 minutes from Supabase Cron: syncs every linked engagement
+// Version 1.1 (23 Oct 2026): OneDrive page (live browse, search, upload, new folder) and automatic sync. 1.0: engagement folders.
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
@@ -78,12 +80,27 @@ async function discover() {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
+  const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
+  const body = await req.json().catch(() => ({}));
+  // the 15-minute schedule
+  if (body.action === "sync_all") {
+    if (!Deno.env.get("PUSH_SECRET") || req.headers.get("x-push-secret") !== Deno.env.get("PUSH_SECRET")) return json({ error: "forbidden" }, 403);
+    const { data: list } = await db.from("engagements").select("*").not("onedrive_folder_id", "is", null);
+    const out: unknown[] = [];
+    for (const e of list ?? []) { try { const r = await sync(db, e); if (r.uploaded || r.downloaded || r.errors.length) out.push({ id: e.id, ...r }); } catch (err) { out.push({ id: e.id, error: String(err).slice(0, 200) }); } }
+    return json({ ok: true, engagements: (list ?? []).length, changed: out });
+  }
   const me = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } }, auth: { persistSession: false } });
   const { data: isStaff } = await me.rpc("is_staff");
   if (!isStaff) return json({ error: "staff only" }, 403);
-  const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
-  const body = await req.json().catch(() => ({}));
   try {
+    // ---- the OneDrive page: partner only, because the Microsoft permission covers the whole company account
+    if (["roots", "browse", "search", "upload", "mkdir"].includes(body.action)) {
+      const { data: u } = await me.auth.getUser();
+      const { data: st } = await db.from("staff").select("role").eq("user_id", u?.user?.id ?? "").maybeSingle();
+      if (st?.role !== "partner") return json({ error: "The OneDrive page is for partners only" }, 403);
+      return json({ ok: true, ...(await page(db, body)) });
+    }
     if (body.action === "discover") {
       const d = await discover();
       await db.from("app_settings").upsert({ key: "onedrive", value: d, updated_at: new Date().toISOString() });
@@ -115,6 +132,52 @@ Deno.serve(async (req) => {
     return json({ ok: false, error: String(err instanceof Error ? err.message : err) }, 500);
   }
 });
+
+const pick = (c: any, driveId: string) => ({ id: c.id, name: c.name, folder: !!c.folder, count: c.folder?.childCount ?? null, size: c.size ?? null, modified: c.lastModifiedDateTime ?? null, url: c.webUrl, drive: c.parentReference?.driveId ?? driveId, path: c.parentReference?.path ?? null });
+
+async function page(db: any, b: any) {
+  const user = encodeURIComponent(Deno.env.get("MAIL_FROM")!);
+  if (b.action === "roots") {
+    const mine: any = await g(`/users/${user}/drive/root?$select=id,name,webUrl,parentReference`);
+    const roots: any[] = [{ id: mine.id, drive: mine.parentReference?.driveId, name: "My OneDrive (Consortia)", url: mine.webUrl, folder: true }];
+    let common: any = null, note = "";
+    try {
+      const { data: s } = await db.from("app_settings").select("value").eq("key", "onedrive").maybeSingle();
+      common = s?.value?.drive_id ? s.value : await discover();
+      if (!s?.value?.drive_id) await db.from("app_settings").upsert({ key: "onedrive", value: common, updated_at: new Date().toISOString() });
+      const root: any = await g(`/drives/${common.drive_id}/root?$select=id,name,webUrl`);
+      roots.unshift({ id: root.id, drive: common.drive_id, name: "Common", url: root.webUrl, folder: true });
+    } catch (e) { note = String(e).slice(0, 300); }
+    return { roots, note };
+  }
+  if (b.action === "browse") {
+    const items = (await children(b.drive, b.item)).map((c) => pick(c, b.drive))
+      .sort((x, y) => (Number(y.folder) - Number(x.folder)) || x.name.localeCompare(y.name, "en", { numeric: true }));
+    const self: any = await g(`/drives/${b.drive}/items/${b.item}?$select=id,name,webUrl`);
+    return { items, folder: { id: self.id, name: self.name, url: self.webUrl } };
+  }
+  if (b.action === "search") {
+    const q = String(b.q ?? "").replace(/'/g, "''").trim();
+    if (q.length < 2) return { items: [] };
+    const drives: string[] = [b.drive].filter(Boolean);
+    if (!drives.length) {
+      const mine: any = await g(`/users/${user}/drive?$select=id`); drives.push(mine.id);
+      const { data: s } = await db.from("app_settings").select("value").eq("key", "onedrive").maybeSingle();
+      if (s?.value?.drive_id) drives.unshift(s.value.drive_id);
+    }
+    const items: any[] = [];
+    for (const d of drives) { try { const r: any = await g(`/drives/${d}/root/search(q='${encodeURIComponent(q)}')?$top=50`); items.push(...(r.value ?? []).map((c: any) => pick(c, d))); } catch (_) { /* one drive may refuse */ } }
+    return { items: items.slice(0, 80) };
+  }
+  if (b.action === "mkdir") {
+    const f: any = await g(`/drives/${b.drive}/items/${b.item}/children`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: safeName(b.name), folder: {}, "@microsoft.graph.conflictBehavior": "rename" }) });
+    return { item: pick(f, b.drive) };
+  }
+  // upload: small files straight in (the page sends files up to 25 MB)
+  const bin = Uint8Array.from(atob(String(b.contentBase64 ?? "")), (c) => c.charCodeAt(0));
+  const f: any = await g(`/drives/${b.drive}/items/${b.item}:/${encodeURIComponent(safeName(b.name))}:/content?@microsoft.graph.conflictBehavior=rename`, { method: "PUT", body: bin });
+  return { item: pick(f, b.drive) };
+}
 
 /** Two-way, additive: new Solonos files go up, new OneDrive files come down. Nothing is ever deleted on either side. */
 async function sync(db: any, e: any) {

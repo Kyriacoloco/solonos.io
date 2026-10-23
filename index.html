@@ -232,7 +232,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.12";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.13";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -1863,6 +1863,76 @@ function EngagementFollowup({ e }) {
   return <Card title="Follow-up"><p className="muted small" style={{ margin: "0 0 10px" }}>Sent a draft and heard nothing? Start the follow-up: a touch every 3 working days, 5 in total. A client who has paid never goes to Lost; after the last touch they go Quiet and come back on your list every 30 days.</p><LeadTasks lead={lead} fu={fu} reload={load} engagement={e} /></Card>;
 }
 
+/** The OneDrive page: a live window into the Consortia OneDrive and the Common library. Click a folder to go in, a file to open it in OneDrive. */
+const fileIcon = (it) => it.folder ? "📁" : /\.(xlsx?|xlsm|csv)$/i.test(it.name) ? "📊" : /\.(docx?)$/i.test(it.name) ? "📝" : /\.(pptx?)$/i.test(it.name) ? "📽" : /\.pdf$/i.test(it.name) ? "📕" : /\.(png|jpe?g|gif|webp)$/i.test(it.name) ? "🖼" : "📄";
+const fileSize = (n) => n == null ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+function OneDrivePage() {
+  const [run, busy] = useAction();
+  const [roots, setRoots] = useState(null);
+  const [note, setNote] = useState("");
+  const [trail, setTrail] = useState([]);        // [{ drive, id, name, url }]
+  const [items, setItems] = useState(null);
+  const [q, setQ] = useState("");
+  const [found, setFound] = useState(null);
+  const here = trail[trail.length - 1];
+  useEffect(() => { run(async () => { const r = await callFn("onedrive", { action: "roots" }); setRoots(r.roots); setNote(r.note || ""); }); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+  const go = (t) => run(async () => { setFound(null); const r = await callFn("onedrive", { action: "browse", drive: t[t.length - 1].drive, item: t[t.length - 1].id }); setTrail(t); setItems(r.items); });
+  const openItem = (it) => (it.folder ? go([...trail, { drive: it.drive, id: it.id, name: it.name, url: it.url }]) : window.open(it.url, "_blank", "noopener"));
+  const search = () => run(async () => { const r = await callFn("onedrive", { action: "search", q, drive: here?.drive }); setFound(r.items); });
+  const [newName, setNewName] = useState(null);
+  const create = () => run(async () => { await callFn("onedrive", { action: "mkdir", drive: here.drive, item: here.id, name: newName }); setNewName(null); await go(trail); }, "Folder created");
+  const upload = (files) => run(async () => {
+    for (const f of files) {
+      if (f.size > 25 * 1048576) throw new Error(`${f.name} is over 25 MB; drop big files into OneDrive directly`);
+      const b64 = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = () => bad(new Error("could not read the file")); r.readAsDataURL(f); });
+      await callFn("onedrive", { action: "upload", drive: here.drive, item: here.id, name: f.name, contentBase64: b64 });
+    }
+    await go(trail);
+  }, files.length === 1 ? "Uploaded" : `${files.length} files uploaded`);
+  const rows = found ?? items;
+  return (
+    <>
+      <div className="pagehead">
+        <div><h1>OneDrive</h1><p className="hide-sm">Live view of Common and your Consortia OneDrive. Click a folder to open it, a file to open it in OneDrive.</p></div>
+        <div className="row" style={{ gap: 6 }}>
+          <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()} placeholder={here ? `Search in ${trail[0].name}…` : "Search all files…"} style={{ width: 240, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", font: "inherit" }} />
+          <button className="btn" disabled={busy || q.trim().length < 2} onClick={search}>Search</button>
+          {found && <button className="btn" onClick={() => { setFound(null); setQ(""); }}>Clear</button>}
+        </div>
+      </div>
+      {note && !roots?.some((r) => r.name === "Common") && <div className="note" style={{ marginBottom: 12 }}>Common is not reachable yet: add the Sites.Read.All permission to the Solonos Mail app in Microsoft Entra and grant admin consent. Your own OneDrive works already.</div>}
+      <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+        <button className="btn" onClick={() => { setTrail([]); setItems(null); setFound(null); }}>OneDrive</button>
+        {trail.map((t, i) => <React.Fragment key={t.id}><span className="muted">›</span><button className="btn" onClick={() => go(trail.slice(0, i + 1))}>{t.name}</button></React.Fragment>)}
+        {here && <span style={{ marginLeft: "auto" }} className="row">
+          <a className="btn" href={here.url} target="_blank" rel="noreferrer">Open this folder in OneDrive</a>
+          {newName === null ? <button className="btn" onClick={() => setNewName("")}>New folder</button> : <><input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && newName.trim() && create()} placeholder="Folder name" style={{ padding: "7px 9px", borderRadius: 8, border: "1px solid var(--border)", font: "inherit" }} /><button className="btn primary" disabled={busy || !newName.trim()} onClick={create}>Create</button><button className="btn" onClick={() => setNewName(null)}>Cancel</button></>}
+          <label className="btn" style={{ cursor: "pointer" }}>Upload<input type="file" multiple style={{ display: "none" }} onChange={(e) => { const fs = [...(e.target.files ?? [])]; e.target.value = ""; if (fs.length) upload(fs); }} /></label>
+        </span>}
+      </div>
+      {!roots ? <span className="muted small">{busy ? "Connecting to OneDrive…" : "Could not reach OneDrive."}</span> : !here && !found ? (
+        <div className="stack" style={{ gap: 8 }}>
+          {roots.map((r) => <div key={r.id} className="leadrow" onClick={() => go([{ drive: r.drive, id: r.id, name: r.name, url: r.url }])}><span style={{ fontWeight: 700 }}>☁ {r.name}</span><span className="muted small">Open</span></div>)}
+        </div>
+      ) : (
+        <div onDragOver={(e) => { if (here) e.preventDefault(); }} onDrop={(e) => { if (!here) return; e.preventDefault(); const fs = [...(e.dataTransfer.files ?? [])]; if (fs.length) upload(fs); }}>
+          {busy && !rows ? <span className="muted small">Loading…</span> : !rows?.length ? <Empty title={found ? "Nothing found" : "Empty folder"}>{found ? "Try another word." : "Drop files here to upload them."}</Empty> : (
+            <div className="stack" style={{ gap: 4, opacity: busy ? .6 : 1 }}>
+              {rows.map((it) => (
+                <div key={it.id} className="leadrow" onClick={() => openItem(it)} title={it.folder ? "Open folder" : "Open in OneDrive"}>
+                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileIcon(it)} <span style={{ fontWeight: it.folder ? 600 : 500 }}>{it.name}</span>{found && it.path && <span className="muted small"> · {decodeURIComponent(String(it.path).replace(/^.*root:/, "")) || "/"}</span>}</span>
+                  <span className="muted small" style={{ flex: "none" }}>{it.folder ? `${it.count ?? ""} item${it.count === 1 ? "" : "s"}` : fileSize(it.size)}{it.modified ? ` · ${day(it.modified)}` : ""}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {here && <p className="muted small" style={{ marginTop: 10 }}>Tip: drag files from your computer onto this list to upload them here.</p>}
+        </div>
+      )}
+    </>
+  );
+}
+
 /** The client's folder in Common / Projects / <type> / <client>, and the two-way "Sync now". */
 function OneDriveCard({ e, reload }) {
   const [run, busy] = useAction();
@@ -1894,7 +1964,7 @@ function OneDriveCard({ e, reload }) {
             <button className="btn primary" disabled={busy} onClick={sync}>{busy ? "Syncing…" : "Sync now"}</button>
             <span className="muted small">{e.onedrive_synced_at ? `last sync ${ago(e.onedrive_synced_at)}` : "never synced"}</span>
           </div>
-          <p className="muted small" style={{ margin: "8px 0 0" }}>New Solonos files (NDA, letter, uploads, invoices, Valuation Builder) go up to OneDrive; files you add in the OneDrive folders come into Solonos. Nothing is deleted on either side.</p>
+          <p className="muted small" style={{ margin: "8px 0 0" }}>Syncs by itself every 15 minutes. New Solonos files (NDA, letter, uploads, invoices, Valuation Builder) go up to OneDrive; files you add in the OneDrive folders come into Solonos. Nothing is deleted on either side.</p>
         </>
       ) : !form ? (
         <>
@@ -3534,6 +3604,7 @@ const NAV = [
   ["Time", "/app/time", 4],
   ["Invoices", "/app/invoices", 3],
   ["Tasks", "/app/tasks"],
+  ["OneDrive", "/app/onedrive", null, "partner"],
   ["Reports", "/app/reports"],
   ["Settings", "/app/settings"],
 ];
@@ -3573,7 +3644,7 @@ function Shell({ session, staff, signOut }) {
         <div className="menu">
         <Bell />
         <a href="/app/engagements" title="Open an engagement and click 'Preview client's page'">Client portal <span className="soon">via engagement</span></a>
-        {NAV.map(([label, to, slice]) => (
+        {NAV.filter(([, , , role]) => !role || staff?.role === role).map(([label, to, slice]) => (
           <NavLink key={to} to={to} className={({ isActive }) => (isActive ? "active" : "")}>
             {label}{slice && <span className="soon">slice {slice}</span>}
           </NavLink>
@@ -3597,6 +3668,7 @@ function Shell({ session, staff, signOut }) {
           <Route path="/app/valuation-builder" element={<ValuationBuilder />} />
           <Route path="/app/settings" element={<Settings />} />
           <Route path="/app/tasks" element={<Tasks />} />
+          <Route path="/app/onedrive" element={staff?.role === "partner" ? <OneDrivePage /> : <Navigate to="/app/leads" replace />} />
           <Route path="/app/*" element={<Soon />} />
           <Route path="*" element={<Navigate to="/app/leads" replace />} />
         </Routes>
