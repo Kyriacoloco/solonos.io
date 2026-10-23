@@ -244,7 +244,7 @@ Deno.serve(async (req) => {
       const mr = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/send-email`, { method: "POST", headers: { "content-type": "application/json", "x-sync-secret": Deno.env.get("GHL_SYNC_SECRET") ?? "" }, body: JSON.stringify({ to: email, subject: `${e.company_name || e.client_name} - your access to the project folders`, html }) });
       const mo = await mr.json().catch(() => ({}));
       if (!mr.ok || mo.ok === false) throw new Error(`Access given in OneDrive, but the email failed: ${mo.error ?? mr.status}. Send the links yourself from OneDrive.`);
-      const expires = body.expires_at ? new Date(`${String(body.expires_at).slice(0, 10)}T23:59:00`).toISOString() : null;
+      const expires = body.expires_at ? `${String(body.expires_at).slice(0, 10)}T20:00:00.000Z` : null;   // end of that day in Europe
       const entry = { id: crypto.randomUUID(), email, scope: body.scope === "client" ? "client" : "folder", label, items, expires_at: expires, at: new Date().toISOString(), revoked_at: null };
       const list = [...(Array.isArray(e.dataroom_shared) ? e.dataroom_shared : []), entry];
       await db.from("engagements").update({ dataroom_shared: list }).eq("id", e.id);
