@@ -9,8 +9,9 @@
 //   POST { action: "sync", engagement_id }                        Solonos -> OneDrive for new Solonos files, OneDrive -> Solonos for new OneDrive files
 //   POST { action: "roots" | "browse" | "search" | "upload" | "mkdir" }  the OneDrive page in Solonos (partner only)
 //   POST { action: "sync_all" } with header x-push-secret         every 15 minutes from Supabase Cron: syncs every linked engagement
-//   POST { action: "dataroom", engagement_id }                  makes "Data Room" + the template folders inside the project folder
+//   POST { action: "dataroom", engagement_id }                  makes an empty "Data Room" folder inside the project folder
 //   POST { action: "share_dataroom", engagement_id, email, message }  Microsoft invites that email to the Data Room folder (can edit)
+// Version 1.4 (23 Oct 2026): the data room starts empty; Kyriacos makes the folders himself.
 // Version 1.3 (23 Oct 2026): data room (template folders, shared with the client through Microsoft); the sync no longer copies
 //   anything from the Data Room down to Solonos, and skips OneDrive files over 20 MB.
 // Version 1.2 (23 Oct 2026): browse / upload / mkdir with engagement_id work for any staff, but only inside that project's folder
@@ -23,11 +24,8 @@ const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: 
 const G = "https://graph.microsoft.com/v1.0";
 
 // The folders made inside every client folder, and where each kind of Solonos file goes.
-// Data room folders by project type (you can add, rename or delete folders in OneDrive afterwards)
+// The data room: one empty folder inside the project folder; the folders inside it are made by hand
 const DATAROOM = "Data Room";
-const ROOM_SELL = ["1 Advisory Reports", "2 Corporate Documents", "3 Due Diligence Materials", "4 Financial Documents", "5 Legal Documents", "6 Marketing Materials", "7 Operational Information", "8 Transaction Process Documents"];
-const ROOM_BASIC = ["1 Financial Statements", "2 Management Accounts", "3 Budget & Forecast", "4 Corporate & Legal", "5 Contracts", "6 Other"];
-const roomFor = (t: string) => (["sell_side", "ma"].includes(t) ? ROOM_SELL : ROOM_BASIC);
 const SUB = { nda: "01 NDA & Letter", fin: "02 Financials", vb: "03 Valuation Builder", draft: "04 Drafts", final: "05 Final report", inv: "06 Invoices", other: "07 Other" };
 const kindToSub: Record<string, string> = {
   nda: SUB.nda, engagement_letter: SUB.nda, client_upload: SUB.fin, valuation_builder: SUB.vb,
@@ -151,9 +149,8 @@ Deno.serve(async (req) => {
     if (body.action === "dataroom") {
       if (!e.onedrive_folder_id) throw new Error("Create the project's OneDrive folder first");
       const room: any = await ensureFolder(e.onedrive_drive_id, e.onedrive_folder_id, DATAROOM);
-      for (const n of roomFor(e.engagement_type)) await ensureFolder(e.onedrive_drive_id, room.id, n);
       await db.from("engagements").update({ dataroom_folder_id: room.id, dataroom_url: room.webUrl }).eq("id", e.id);
-      return json({ ok: true, url: room.webUrl, folders: roomFor(e.engagement_type) });
+      return json({ ok: true, url: room.webUrl });
     }
 
     if (body.action === "share_dataroom") {
