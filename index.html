@@ -236,7 +236,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.19";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.20";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -2068,7 +2068,9 @@ function OneDriveCard({ e, reload }) {
     if (!c) { const { data } = await supabase.from("app_settings").select("value").eq("key", "onedrive").maybeSingle(); c = data?.value ?? null; }
     if (!c) c = await callFn("onedrive", { action: "discover" });
     setCfg(c);
-    const val = (c.categories ?? []).find((x) => /valuation/i.test(x.name)) ?? (c.categories ?? [])[0];
+    const want = { valuation: /valuation/i, business_plan: /business plan/i, teaser: /teaser/i, form_8802: /8802/, transfer_pricing: /transfer pricing/i, feasibility: /feasibility/i,
+      financial_modeling: /model/i, restructuring: /restructuring/i, ma: /^\s*9\.?\s*M&A|^M&A/i, cfo: /cfo/i, sell_side: /sell.?side/i }[e.engagement_type || "valuation"];
+    const val = (want && (c.categories ?? []).find((x) => want.test(x.name))) ?? (c.categories ?? [])[0];
     setForm({ category_id: val?.id ?? "", name: e.company_name || e.client_name || "" });
   };
   const refresh = () => run(async () => { const c = await callFn("onedrive", { action: "discover" }); setCfg(c); }, "Folder list refreshed");
@@ -2088,7 +2090,7 @@ function OneDriveCard({ e, reload }) {
             <button className="btn primary" disabled={busy} onClick={sync}>{busy ? "Syncing…" : "Sync now"}</button>
             <span className="muted small">{e.onedrive_synced_at ? `last sync ${ago(e.onedrive_synced_at)}` : "never synced"}</span>
           </div>
-          <p className="muted small" style={{ margin: "8px 0 0" }}>Syncs by itself every 15 minutes. New Solonos files (NDA, letter, uploads, invoices, Valuation Builder) go up to OneDrive; files you add in the OneDrive folders come into Solonos. Nothing is deleted on either side.</p>
+          <p className="muted small" style={{ margin: "8px 0 0" }}>Every 15 minutes Solonos puts its own files (NDA, letter, invoices, Valuation Builder) into the OneDrive folders. Files you or the client add in OneDrive stay in OneDrive.</p>
         </>
       ) : !form ? (
         <>
@@ -2103,7 +2105,7 @@ function OneDriveCard({ e, reload }) {
             </select>
           </Field>
           <Field label="Folder name"><input value={form.name} onChange={(x) => setForm({ ...form, name: x.target.value })} /></Field>
-          <div className="muted small">Creates Common / Projects / {(cfg?.categories ?? []).find((c) => c.id === form.category_id)?.name ?? "…"} / {form.name || "…"} with folders 01 NDA & Letter, 02 Financials, 03 Valuation Builder, 04 Drafts, 05 Final report, 06 Invoices, 07 Other. If a folder with that name already exists, it is used.</div>
+          <div className="muted small">Creates Common / Projects / {(cfg?.categories ?? []).find((c) => c.id === form.category_id)?.name ?? "…"} / {form.name || "…"} with folders 1. Engagement Letter &amp; NDA, 2. Workings, 3. Deliverables, 4. Uploads, 5. Virtual Data Room. If a folder with that name already exists, it is used.</div>
           <div className="row" style={{ gap: 8 }}>
             <button className="btn primary" disabled={busy || !form.category_id || !form.name.trim()} onClick={create}>{busy ? "Creating…" : "Create and sync"}</button>
             <button className="btn" disabled={busy} onClick={() => setForm(null)}>Cancel</button>
@@ -2173,7 +2175,7 @@ function ValuationProject({ e, deposit, invoices, docs, agreements, feed, contac
           </div>
         </div>
       )}
-      {tab === "onedrive" && <div className="stack" style={{ gap: 16 }}><DataRoomCard e={e} reload={reload} /><ProjectOneDrive e={e} reload={reload} /></div>}
+      {tab === "onedrive" && <div className="stack" style={{ gap: 16 }}><ProjectOneDrive e={e} reload={reload} /><AccessCard e={e} reload={reload} /></div>}
       {tab === "engagement" && (
         <>
           <Stepper stage={e.stage} />
@@ -2213,7 +2215,7 @@ function useProjectTab() {
 function ProjectTabs({ tab, setTab, e }) {
   return (
     <div className="tabs">
-      {PROJECT_TABS.map(([k, l]) => <button key={k} className={`tab${tab === k ? " on" : ""}`} onClick={() => setTab(k)}>{l}{k === "onedrive" && !e.dataroom_folder_id ? " ·" : ""}</button>)}
+      {PROJECT_TABS.map(([k, l]) => <button key={k} className={`tab${tab === k ? " on" : ""}`} onClick={() => setTab(k)}>{l}{k === "onedrive" && !e.onedrive_folder_id ? " ·" : ""}</button>)}
     </div>
   );
 }
@@ -2278,37 +2280,83 @@ function InvoiceSummary({ invoices }) {
   );
 }
 
-/** The data room: a "Data Room" folder inside the project's OneDrive folder, shared with the client by Microsoft.
- *  The client works in OneDrive itself (any size, any number of files, whole folders). */
-function DataRoomCard({ e, reload }) {
+/** Who can open what in OneDrive. The client gets 3 Deliverables (view), 4 Uploads and 5 Virtual Data Room (edit).
+ *  Buyers get one folder inside 5 Virtual Data Room each, view only or with upload, until a date. Expired access is removed by itself. */
+const plusDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+function AccessCard({ e, reload }) {
   const [run, busy] = useAction();
-  const first = String(e.client_name || "").trim().split(/\s+/)[0];
-  const [f, setF] = useState(null);     // share form
+  const [form, setForm] = useState(null);      // { scope, email, folder_id, role, expires_at, message }
+  const [folders, setFolders] = useState(null);
   if (!e.onedrive_folder_id) return null;
-  const shared = Array.isArray(e.dataroom_shared) ? e.dataroom_shared : [];
-  const create = () => run(async () => { await callFn("onedrive", { action: "dataroom", engagement_id: e.id }); await reload(); }, "Data room created in OneDrive");
-  const share = () => run(async () => { await callFn("onedrive", { action: "share_dataroom", engagement_id: e.id, email: f.email, message: f.message }); setF(null); await reload(); }, `Microsoft has emailed ${f.email} access to the data room`);
+  const list = Array.isArray(e.dataroom_shared) ? e.dataroom_shared : [];
+  const live = list.filter((a) => !a.revoked_at), gone = list.filter((a) => a.revoked_at);
+  const client = live.find((a) => a.scope === "client");
+  const buyers = live.filter((a) => a.scope !== "client");
+  const first = String(e.client_name || "").trim().split(/\s+/)[0];
   if (!e.dataroom_folder_id) return (
-    <Card title="Data room">
-      <p className="small" style={{ margin: "0 0 12px" }}>Creates an empty "Data Room" folder inside this project's OneDrive folder. You make the folders inside it yourself (below, or in OneDrive), then share it with the client.</p>
-      <button className="btn primary" disabled={busy} onClick={create}>Create data room</button>
+    <Card title="Access">
+      <p className="small" style={{ margin: "0 0 10px" }}>This project folder was made before the new layout. Add the five folders (1. Engagement Letter &amp; NDA, 2. Workings, 3. Deliverables, 4. Uploads, 5. Virtual Data Room) to give access.</p>
+      <button className="btn primary" disabled={busy} onClick={() => run(async () => { await callFn("onedrive", { action: "dataroom", engagement_id: e.id }); await reload(); }, "Folders added")}>Add the five folders</button>
     </Card>
   );
+  const openBuyer = () => run(async () => {
+    const r = await callFn("onedrive", { action: "vdr_folders", engagement_id: e.id });
+    setFolders(r.folders ?? []);
+    setForm({ scope: "folder", email: "", folder_id: (r.folders ?? [])[1]?.id ?? (r.folders ?? [])[0]?.id ?? "", role: "read", expires_at: plusDays(90), message: `Dear,\n\nYou now have access to the data room for ${e.company_name || "this project"}. Access ends on the date shown by Microsoft.\n\nKind regards,\nKyriacos` });
+  });
+  const openClient = () => setForm({ scope: "client", email: e.client_email || "", message: `Dear ${first}, you now have access to your project folders: Deliverables (our reports for you), Uploads (put your documents here) and the Virtual Data Room. Kind regards, Kyriacos` });
+  const grant = () => run(async () => {
+    await callFn("onedrive", { action: "grant", engagement_id: e.id, scope: form.scope, email: form.email, folder_id: form.folder_id, role: form.role, expires_at: form.scope === "client" ? null : form.expires_at || null, message: form.message });
+    setForm(null); await reload();
+  }, `Microsoft has emailed ${form?.email} the access`);
+  const remove = (a) => run(async () => { await callFn("onedrive", { action: "revoke", engagement_id: e.id, access_id: a.id }); await reload(); }, `Access removed for ${a.email}`);
+  const row = (a) => (
+    <div key={a.id} className="row between small" style={{ gap: 8 }}>
+      <span style={{ minWidth: 0 }}><strong>{a.email}</strong> <span className="muted">· {a.label}{a.expires_at ? ` · until ${day(a.expires_at)}` : ""}</span></span>
+      <button className="btn" disabled={busy} onClick={() => remove(a)}>Remove</button>
+    </div>
+  );
   return (
-    <Card title="Data room" right={<a className="btn primary" href={e.dataroom_url} target="_blank" rel="noreferrer">Open data room</a>}>
-      <div className="stack" style={{ gap: 8 }}>
-        {shared.length === 0 ? <span className="muted small">Not shared yet. Only the Data Room folder is shared; the rest of the project folder stays private.</span>
-          : shared.map((x) => <div key={x.email} className="small">✓ {x.email} <span className="muted">· can view and upload · since {day(x.at)}</span></div>)}
-        {f ? (
+    <Card title="Access" right={<a className="btn" href={e.dataroom_url} target="_blank" rel="noreferrer">Open Virtual Data Room</a>}>
+      <div className="stack" style={{ gap: 14 }}>
+        <div>
+          <h3 style={{ margin: "0 0 6px" }}>Client</h3>
+          {client ? row(client) : !form && <button className="btn primary" onClick={openClient}>Give client access</button>}
+          <div className="muted small" style={{ marginTop: 4 }}>Sees 3. Deliverables (view), 4. Uploads and 5. Virtual Data Room (view and upload). Never 1. Engagement Letter &amp; NDA or 2. Workings.</div>
+        </div>
+        <div>
+          <h3 style={{ margin: "0 0 6px" }}>Buyers</h3>
+          <div className="stack" style={{ gap: 6 }}>
+            {buyers.length === 0 && <span className="muted small">Nobody yet. Make a folder per buyer (or per stage) inside 5. Virtual Data Room, then give each buyer their folder.</span>}
+            {buyers.map(row)}
+            {!form && <div><button className="btn" disabled={busy} onClick={openBuyer}>Give a buyer access</button></div>}
+          </div>
+        </div>
+        {form && (
           <div className="card" style={{ padding: 12, background: "var(--sunken)" }}>
             <div className="stack" style={{ gap: 10 }}>
-              <Field label="Client's email"><input type="email" value={f.email} onChange={(x) => setF({ ...f, email: x.target.value })} /></Field>
-              <Field label="Message in Microsoft's invitation email"><textarea rows={4} value={f.message} onChange={(x) => setF({ ...f, message: x.target.value })} /></Field>
-              <p className="muted small" style={{ margin: 0 }}>Microsoft sends one email with the link. They open it, get a code by email, and they're in. No Microsoft account needed. They can see the folders, upload and download.</p>
-              <div className="row"><button className="btn primary" disabled={busy || !f.email.trim()} onClick={share}>Share</button><button className="btn" onClick={() => setF(null)}>Cancel</button></div>
+              <h3 style={{ margin: 0 }}>{form.scope === "client" ? "Give the client access" : "Give a buyer access"}</h3>
+              <Field label="Email"><input type="email" value={form.email} onChange={(x) => setForm({ ...form, email: x.target.value })} placeholder="name@company.com" /></Field>
+              {form.scope !== "client" && <>
+                <Field label="Folder">
+                  <select value={form.folder_id} onChange={(x) => setForm({ ...form, folder_id: x.target.value })}>
+                    {(folders ?? []).map((f) => <option key={f.id} value={f.id}>{f.depth ? "  ".repeat(f.depth) : ""}{f.name}</option>)}
+                  </select>
+                </Field>
+                {(folders ?? []).length <= 1 && <span className="muted small">No folders inside the data room yet. Make them in the OneDrive list below (open 5. Virtual Data Room, then New folder), then come back.</span>}
+                <div className="grid2">
+                  <Field label="Can"><select value={form.role} onChange={(x) => setForm({ ...form, role: x.target.value })}><option value="read">View and download only</option><option value="write">View and upload</option></select></Field>
+                  <Field label="Access ends on"><input type="date" value={form.expires_at} onChange={(x) => setForm({ ...form, expires_at: x.target.value })} /></Field>
+                </div>
+              </>}
+              <Field label="Message in Microsoft's invitation email"><textarea rows={4} value={form.message} onChange={(x) => setForm({ ...form, message: x.target.value })} /></Field>
+              <p className="muted small" style={{ margin: 0 }}>Microsoft sends the email with the link. They confirm with a code sent to that email; no Microsoft account needed.{form.scope !== "client" ? " On the end date Solonos removes the access by itself." : ""}</p>
+              <div className="row"><button className="btn primary" disabled={busy || !form.email.trim() || (form.scope !== "client" && !form.folder_id)} onClick={grant}>Give access</button><button className="btn" onClick={() => setForm(null)}>Cancel</button></div>
             </div>
           </div>
-        ) : <div><button className="btn" onClick={() => setF({ email: shared.length ? "" : (e.client_email || ""), message: `Dear ${first}, this is our secure data room for ${e.company_name || "your project"}. Please upload the documents into the matching folders. Kind regards, Kyriacos` })}>{shared.length ? "Share with someone else" : "Share with client"}</button></div>}
+        )}
+        {gone.length > 0 && <details className="small"><summary className="muted">{gone.length} removed or expired</summary>{gone.map((a) => <div key={a.id} className="muted">{a.email} · {a.label} · {a.revoked_why === "expired" ? "expired" : "removed"} {day(a.revoked_at)}</div>)}</details>}
+        <div className="muted small">Margarita and your team see every folder through Solonos (this tab). To give her the folders in OneDrive itself too, add her once as a member of the Common site.</div>
       </div>
     </Card>
   );
@@ -2419,7 +2467,7 @@ function SimpleEngagement({ e, invoices, feed, contact, reload }) {
           <div className="stack" style={{ gap: 16 }}><ClientDetails e={e} reload={reload} /><ActivityCard e={e} feed={feed} /></div>
         </div>
       )}
-      {tab === "onedrive" && <div className="stack" style={{ gap: 16 }}><DataRoomCard e={e} reload={reload} /><ProjectOneDrive e={e} reload={reload} /></div>}
+      {tab === "onedrive" && <div className="stack" style={{ gap: 16 }}><ProjectOneDrive e={e} reload={reload} /><AccessCard e={e} reload={reload} /></div>}
       {tab === "engagement" && (
         <div className="grid2">
           <div className="stack" style={{ gap: 16 }}><Card title="NDA"><NdaMaker engagement={e} /></Card><LetterSlot e={e} /></div>
@@ -3530,11 +3578,17 @@ function Portal({ session }) {
       </nav>
       <main className="main">
         {preview && <div className="note" style={{ marginBottom: 14, background: "#F5E4C0" }}>Staff preview of {e.client_name}'s page. You see what they see; signing, confirming and uploading are disabled here.</div>}
-        {e.dataroom_url && (e.dataroom_shared ?? []).length > 0 && current === "invoices" && (
-          <Card title="Your data room" style={{ marginBottom: 16 }} right={<a className="btn primary" href={e.dataroom_url} target="_blank" rel="noreferrer">Open data room</a>}>
-            <p className="small" style={{ margin: 0 }}>Upload your documents into the matching folders. Any size, as many files as you need, and you can drag in whole folders. The first time, Microsoft emails you a short code to confirm it's you.</p>
-          </Card>
-        )}
+        {(() => {
+          const mine = (Array.isArray(e.dataroom_shared) ? e.dataroom_shared : []).find((a) => a.scope === "client" && !a.revoked_at);
+          if (!mine || current !== "invoices") return null;
+          const nice = (n) => String(n).replace(/^\d+\.\s*/, "");
+          return (
+            <Card title="Your folders" style={{ marginBottom: 16 }}>
+              <div className="row wrap" style={{ gap: 8, marginBottom: 8 }}>{(mine.items ?? []).map((it) => <a key={it.item} className="btn primary" href={it.url} target="_blank" rel="noreferrer">{nice(it.name)}</a>)}</div>
+              <p className="small" style={{ margin: 0 }}>Deliverables: our reports for you. Uploads: put your documents here, any size, as many as you need, whole folders too. Virtual Data Room: the documents for buyers. The first time, Microsoft emails you a short code to confirm it's you.</p>
+            </Card>
+          );
+        })()}
         {current === "nda" && (
           <>
             <div className="pagehead"><div><h1>Non-Disclosure Agreement</h1><p>Read it below, then sign at the bottom. This is what lets us receive your financial information in confidence.</p></div></div>
