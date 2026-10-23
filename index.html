@@ -232,7 +232,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.13";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.14";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -3636,6 +3636,8 @@ function Shell({ session, staff, signOut }) {
   useEffect(() => { registerSw(); }, []);
   const loc = useLocation();
   useEffect(() => { setMenu(false); }, [loc.pathname]);
+  // role "user" (e.g. Margarita): only the Projects section, which is the engagements list and each engagement's page
+  const limited = staff?.role === "user";
   return (
     <div className="shell">
       <nav className={`sidebar${menu ? " open" : ""}`}>
@@ -3643,12 +3645,14 @@ function Shell({ session, staff, signOut }) {
         <button className="burger" aria-label={menu ? "Close menu" : "Open menu"} aria-expanded={menu} onClick={() => setMenu((m) => !m)}>{menu ? "✕" : "☰"}</button>
         <div className="menu">
         <Bell />
+        {limited ? <NavLink to="/app/engagements" className={({ isActive }) => (isActive ? "active" : "")}>Projects</NavLink> : <>
         <a href="/app/engagements" title="Open an engagement and click 'Preview client's page'">Client portal <span className="soon">via engagement</span></a>
         {NAV.filter(([, , , role]) => !role || staff?.role === role).map(([label, to, slice]) => (
           <NavLink key={to} to={to} className={({ isActive }) => (isActive ? "active" : "")}>
             {label}{slice && <span className="soon">slice {slice}</span>}
           </NavLink>
         ))}
+        </>}
         <div className="foot">
           {staff?.full_name ?? session.user.email}<br />
           <span style={{ opacity: .7 }}>{staff?.role}</span><br />
@@ -3659,6 +3663,13 @@ function Shell({ session, staff, signOut }) {
         </div>
       </nav>
       <main className="main">
+        {limited ? (
+        <Routes>
+          <Route path="/app/engagements" element={<Engagements />} />
+          <Route path="/app/engagements/:id" element={<EngagementDetail />} />
+          <Route path="*" element={<Navigate to="/app/engagements" replace />} />
+        </Routes>
+        ) : (
         <Routes>
           <Route path="/app/dashboard" element={<Dashboard />} />
           <Route path="/app/reports" element={<Reports />} />
@@ -3672,6 +3683,7 @@ function Shell({ session, staff, signOut }) {
           <Route path="/app/*" element={<Soon />} />
           <Route path="*" element={<Navigate to="/app/leads" replace />} />
         </Routes>
+        )}
       </main>
     </div>
   );
