@@ -236,7 +236,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.20";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.21";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -2302,13 +2302,13 @@ function AccessCard({ e, reload }) {
   const openBuyer = () => run(async () => {
     const r = await callFn("onedrive", { action: "vdr_folders", engagement_id: e.id });
     setFolders(r.folders ?? []);
-    setForm({ scope: "folder", email: "", folder_id: (r.folders ?? [])[1]?.id ?? (r.folders ?? [])[0]?.id ?? "", role: "read", expires_at: plusDays(90), message: `Dear,\n\nYou now have access to the data room for ${e.company_name || "this project"}. Access ends on the date shown by Microsoft.\n\nKind regards,\nKyriacos` });
+    setForm({ scope: "folder", email: "", folder_id: (r.folders ?? [])[1]?.id ?? (r.folders ?? [])[0]?.id ?? "", role: "read", expires_at: plusDays(90), message: `Dear,\n\nYou now have access to the data room for ${e.company_name || "this project"}.\n\nKind regards,\nKyriacos` });
   });
   const openClient = () => setForm({ scope: "client", email: e.client_email || "", message: `Dear ${first}, you now have access to your project folders: Deliverables (our reports for you), Uploads (put your documents here) and the Virtual Data Room. Kind regards, Kyriacos` });
   const grant = () => run(async () => {
     await callFn("onedrive", { action: "grant", engagement_id: e.id, scope: form.scope, email: form.email, folder_id: form.folder_id, role: form.role, expires_at: form.scope === "client" ? null : form.expires_at || null, message: form.message });
     setForm(null); await reload();
-  }, `Microsoft has emailed ${form?.email} the access`);
+  }, `Access given and emailed to ${form?.email}`);
   const remove = (a) => run(async () => { await callFn("onedrive", { action: "revoke", engagement_id: e.id, access_id: a.id }); await reload(); }, `Access removed for ${a.email}`);
   const row = (a) => (
     <div key={a.id} className="row between small" style={{ gap: 8 }}>
@@ -2349,8 +2349,8 @@ function AccessCard({ e, reload }) {
                   <Field label="Access ends on"><input type="date" value={form.expires_at} onChange={(x) => setForm({ ...form, expires_at: x.target.value })} /></Field>
                 </div>
               </>}
-              <Field label="Message in Microsoft's invitation email"><textarea rows={4} value={form.message} onChange={(x) => setForm({ ...form, message: x.target.value })} /></Field>
-              <p className="muted small" style={{ margin: 0 }}>Microsoft sends the email with the link. They confirm with a code sent to that email; no Microsoft account needed.{form.scope !== "client" ? " On the end date Solonos removes the access by itself." : ""}</p>
+              <Field label="Message (Solonos emails it from info@ with the folder links)"><textarea rows={4} value={form.message} onChange={(x) => setForm({ ...form, message: x.target.value })} /></Field>
+              <p className="muted small" style={{ margin: 0 }}>Solonos emails them the links from info@. The first time, Microsoft sends them a short code to confirm it's them; no Microsoft account needed.{form.scope !== "client" ? " On the end date Solonos removes the access by itself." : ""}</p>
               <div className="row"><button className="btn primary" disabled={busy || !form.email.trim() || (form.scope !== "client" && !form.folder_id)} onClick={grant}>Give access</button><button className="btn" onClick={() => setForm(null)}>Cancel</button></div>
             </div>
           </div>

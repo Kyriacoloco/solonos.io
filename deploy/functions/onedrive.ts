@@ -15,6 +15,8 @@
 //   POST { action: "grant", engagement_id, email, scope: "folder", folder_id, role, expires_at }  a buyer: one folder inside 5 Virtual Data Room
 //   POST { action: "revoke", engagement_id, access_id }                                    removes that access in OneDrive
 //   POST { action: "vdr_folders", engagement_id }                                         folders inside the data room (two levels), for the picker
+// Version 1.6 (23 Oct 2026): Microsoft grants the access without its own email (it refuses to send one for an app);
+//   Solonos emails the invitation from info@ with your message and the folder links.
 // Version 1.5 (23 Oct 2026): project folder = 1 Engagement Letter & NDA, 2 Workings, 3 Deliverables, 4 Uploads, 5 Virtual Data Room.
 //   Access per person and folder, with an end date (the 15-minute run removes expired access). Nothing is copied from OneDrive to Solonos.
 // Version 1.4 (23 Oct 2026): the data room starts empty; Kyriacos makes the folders himself.
@@ -205,15 +207,25 @@ Deno.serve(async (req) => {
         try {
           r = await g(`/drives/${e.onedrive_drive_id}/items/${t.item}/invite`, {
             method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ recipients: [{ email }], roles: [t.role], requireSignIn: true, sendInvitation: true, message: String(body.message || "").slice(0, 2000) || undefined }),
+            body: JSON.stringify({ recipients: [{ email }], roles: [t.role], requireSignIn: true, sendInvitation: false }),
           });
         } catch (err) {
           const m = String(err);
           if (/sharing|external|guest|policy|notAllowed|accessDenied/i.test(m)) throw new Error(`Microsoft refused to share with ${email}: external sharing is off for this library. ${m.slice(0, 200)}`);
           throw err;
         }
-        items.push({ item: t.item, name: t.name, url: t.url, role: t.role, perms: (r?.value ?? []).map((p: any) => p.id).filter(Boolean) });
+        const link = (r?.value ?? []).map((p: any) => p.link?.webUrl).find(Boolean);
+        items.push({ item: t.item, name: t.name, url: link || t.url, role: t.role, perms: (r?.value ?? []).map((p: any) => p.id).filter(Boolean) });
       }
+      // the invitation email, from info@, with the message written in Solonos
+      const nice = (n: string) => n.replace(/^\d+\.\s*/, "");
+      const esc = (x: string) => x.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string));
+      const links = items.map((i) => `<p style="margin:10px 0"><a href="${i.url}" style="background:#0C4767;color:#FAF3E9;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:600">Open ${esc(nice(i.name))}</a> <span style="color:#6B5457;font-size:13px">${i.role === "write" ? "view and upload" : "view only"}</span></p>`).join("");
+      const until = body.expires_at ? `<p style="color:#6B5457;font-size:13px">Access ends on ${new Date(String(body.expires_at).slice(0, 10)).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}.</p>` : "";
+      const html = `<div style="font-family:Inter,Arial,sans-serif;font-size:15px;line-height:1.55;color:#2A1E20;max-width:560px">${esc(String(body.message || "")).replace(/\n/g, "<br>")}${links}${until}<p style="color:#6B5457;font-size:13px">The first time, Microsoft asks for your email and sends you a short code to confirm it's you. No Microsoft account is needed.</p></div>`;
+      const mr = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/send-email`, { method: "POST", headers: { "content-type": "application/json", "x-sync-secret": Deno.env.get("GHL_SYNC_SECRET") ?? "" }, body: JSON.stringify({ to: email, subject: `${e.company_name || e.client_name} - your access to the project folders`, html }) });
+      const mo = await mr.json().catch(() => ({}));
+      if (!mr.ok || mo.ok === false) throw new Error(`Access given in OneDrive, but the email failed: ${mo.error ?? mr.status}. Send the links yourself from OneDrive.`);
       const expires = body.expires_at ? new Date(`${String(body.expires_at).slice(0, 10)}T23:59:00`).toISOString() : null;
       const entry = { id: crypto.randomUUID(), email, scope: body.scope === "client" ? "client" : "folder", label, items, expires_at: expires, at: new Date().toISOString(), revoked_at: null };
       const list = [...(Array.isArray(e.dataroom_shared) ? e.dataroom_shared : []), entry];
