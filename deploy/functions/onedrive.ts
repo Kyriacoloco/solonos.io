@@ -15,6 +15,8 @@
 //   POST { action: "grant", engagement_id, email, scope: "folder", folder_id, role, expires_at }  a buyer: one folder inside 5 Virtual Data Room
 //   POST { action: "revoke", engagement_id, access_id }                                    removes that access in OneDrive
 //   POST { action: "vdr_folders", engagement_id }                                         folders inside the data room (two levels), for the picker
+// Version 1.7 (23 Oct 2026): Microsoft lets an app share only with existing guests, so Solonos first adds the person as a
+//   guest of the Consortia tenant (Graph /invitations, no Microsoft email; needs the User.Invite.All application permission).
 // Version 1.6 (23 Oct 2026): Microsoft grants the access without its own email (it refuses to send one for an app);
 //   Solonos emails the invitation from info@ with your message and the folder links.
 // Version 1.5 (23 Oct 2026): project folder = 1 Engagement Letter & NDA, 2 Workings, 3 Deliverables, 4 Uploads, 5 Virtual Data Room.
@@ -201,14 +203,30 @@ Deno.serve(async (req) => {
         targets.push({ item: it.id, name: it.id === e.dataroom_folder_id ? SUB.vdr : it.name, url: it.webUrl, role });
         label = `${it.id === e.dataroom_folder_id ? "Whole data room" : it.name} (${role === "write" ? "view and upload" : "view only"})`;
       }
+      // make them a guest first (an app may only share with existing guests); harmless if they already are one
+      try {
+        await g(`/invitations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ invitedUserEmailAddress: email, inviteRedirectUrl: targets[0].url, sendInvitationMessage: false }) });
+      } catch (err) {
+        const m = String(err);
+        if (/403|Authorization_RequestDenied|Insufficient privileges/i.test(m)) throw new Error("Solonos may not add guests yet: add the User.Invite.All (Application) permission to the Solonos Mail app in Microsoft Entra and grant admin consent.");
+        throw err;
+      }
       const items: any[] = [];
       for (const t of targets) {
         let r: any;
         try {
-          r = await g(`/drives/${e.onedrive_drive_id}/items/${t.item}/invite`, {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ recipients: [{ email }], roles: [t.role], requireSignIn: true, sendInvitation: false }),
-          });
+          for (let attempt = 0; ; attempt++) {     // a brand-new guest can take a few seconds to reach SharePoint
+            try {
+              r = await g(`/drives/${e.onedrive_drive_id}/items/${t.item}/invite`, {
+                method: "POST", headers: { "content-type": "application/json" },
+                body: JSON.stringify({ recipients: [{ email }], roles: [t.role], requireSignIn: true, sendInvitation: false }),
+              });
+              break;
+            } catch (err) {
+              if (attempt < 4 && /sharingFailed|noResolvedUsers|invalidRequest/i.test(String(err))) { await new Promise((ok) => setTimeout(ok, 4000)); continue; }
+              throw err;
+            }
+          }
         } catch (err) {
           const m = String(err);
           const why = (m.match(/"message":"([^"]+)/) ?? [])[1] ?? m.slice(0, 400);
