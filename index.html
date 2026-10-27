@@ -236,7 +236,7 @@ h3 { font: 600 14px/1.3 Inter, sans-serif; margin: 0; }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.21";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.22";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -2153,7 +2153,6 @@ function EngagementDetail() {
 function ValuationProject({ e, deposit, invoices, docs, agreements, feed, contact, reload }) {
   const [tab, setTab] = useProjectTab();
   const st = ENGAGEMENT_STAGES[stageIndex(e.stage)];
-  const canDecline = !["engaged", "valuation_active", "completed", "declined"].includes(e.stage);
   return (
     <>
       <ProjectHead e={e} contact={contact} right={<>
@@ -2176,27 +2175,8 @@ function ValuationProject({ e, deposit, invoices, docs, agreements, feed, contac
         </div>
       )}
       {tab === "onedrive" && <div className="stack" style={{ gap: 16 }}><ProjectOneDrive e={e} reload={reload} /><AccessCard e={e} reload={reload} /></div>}
-      {tab === "engagement" && (
-        <>
-          <Stepper stage={e.stage} />
-          <div className="grid2" style={{ marginTop: 18 }}>
-            <div className="stack" style={{ gap: 16 }}>
-              {!["declined"].includes(e.stage) && <LetterCard e={e} reload={reload} agreements={agreements} />}
-              <Checklist e={e} docs={docs} reload={reload} />
-              <ShareDocCard e={e} docs={docs} reload={reload} />
-              {canDecline && <DeclineBox e={e} reload={reload} />}
-            </div>
-            <div className="stack" style={{ gap: 16 }}><NotesCard e={e} contact={contact} reload={reload} /></div>
-          </div>
-        </>
-      )}
-      {tab === "invoicing" && (
-        <div className="stack" style={{ gap: 16, maxWidth: 900 }}>
-          <InvoiceSummary invoices={invoices} />
-          {e.deposit_required ? <DepositCard e={e} deposit={deposit} reload={reload} /> : <RequestDepositCard e={e} reload={reload} />}
-          <Invoices invoices={invoices} deposit={deposit} reload={reload} />
-        </div>
-      )}
+      {tab === "engagement" && <EngagementTab e={e} agreements={agreements} />}
+      {tab === "invoicing" && <InvoicingTab e={e} invoices={invoices} reload={reload} />}
     </>
   );
 }
@@ -2343,7 +2323,7 @@ function AccessCard({ e, reload }) {
                     {(folders ?? []).map((f) => <option key={f.id} value={f.id}>{f.depth ? "  ".repeat(f.depth) : ""}{f.name}</option>)}
                   </select>
                 </Field>
-                {(folders ?? []).length <= 1 && <span className="muted small">No folders inside the data room yet. Make them in the OneDrive list below (open 5. Virtual Data Room, then New folder), then come back.</span>}
+                {(folders ?? []).length <= 1 && <span className="muted small">No folders inside the data room yet. Make them in OneDrive (Open in OneDrive, then 5. Virtual Data Room, then New folder), then come back.</span>}
                 <div className="grid2">
                   <Field label="Can"><select value={form.role} onChange={(x) => setForm({ ...form, role: x.target.value })}><option value="read">View and download only</option><option value="write">View and upload</option></select></Field>
                   <Field label="Access ends on"><input type="date" value={form.expires_at} onChange={(x) => setForm({ ...form, expires_at: x.target.value })} /></Field>
@@ -2369,13 +2349,11 @@ function ProjectOneDrive({ e, reload }) {
   const start = e.onedrive_folder_id ? { drive: e.onedrive_drive_id, id: e.onedrive_folder_id, name: String(e.onedrive_path || "").split(" / ").pop() || "Project folder", url: e.onedrive_url } : null;
   const [trail, setTrail] = useState(start ? [start] : []);
   const [items, setItems] = useState(null);
-  const [newName, setNewName] = useState(null);
   const here = trail[trail.length - 1];
   const go = (t) => run(async () => { const r = await callFn("onedrive", { action: "browse", engagement_id: e.id, drive: t[t.length - 1].drive, item: t[t.length - 1].id }); setTrail(t); setItems(r.items); });
   useEffect(() => { if (start) go([start]); }, [e.onedrive_folder_id]);  // eslint-disable-line react-hooks/exhaustive-deps
   if (!start) return <OneDriveCard e={e} reload={reload} />;
   const openItem = (it) => (it.folder ? go([...trail, { drive: it.drive, id: it.id, name: it.name, url: it.url }]) : window.open(it.url, "_blank", "noopener"));
-  const mkdir = () => run(async () => { await callFn("onedrive", { action: "mkdir", engagement_id: e.id, drive: here.drive, item: here.id, name: newName }); setNewName(null); await go(trail); }, "Folder created");
   const upload = (files) => run(async () => {
     for (const f of files) {
       if (f.size > 25 * 1048576) throw new Error(`${f.name} is over 25 MB: drop it into OneDrive directly`);
@@ -2390,8 +2368,6 @@ function ProjectOneDrive({ e, reload }) {
       <div className="row wrap" style={{ gap: 6, marginBottom: 10 }}>
         {trail.map((t, i) => <React.Fragment key={t.id}>{i > 0 && <span className="muted">›</span>}<button className="btn" onClick={() => go(trail.slice(0, i + 1))}>{t.name}</button></React.Fragment>)}
         <span style={{ marginLeft: "auto" }} className="row">
-          {newName === null ? <button className="btn" onClick={() => setNewName("")}>New folder</button> : <><input autoFocus value={newName} onChange={(x) => setNewName(x.target.value)} onKeyDown={(x) => x.key === "Enter" && newName.trim() && mkdir()} placeholder="Folder name" /><button className="btn primary" disabled={busy || !newName.trim()} onClick={mkdir}>Create</button><button className="btn" onClick={() => setNewName(null)}>Cancel</button></>}
-          <label className="btn" style={{ cursor: "pointer" }}>Upload<input type="file" multiple style={{ display: "none" }} onChange={(x) => { const fs = [...(x.target.files ?? [])]; x.target.value = ""; if (fs.length) upload(fs); }} /></label>
         </span>
       </div>
       <div onDragOver={(x) => x.preventDefault()} onDrop={(x) => { x.preventDefault(); const fs = [...(x.dataTransfer.files ?? [])]; if (fs.length) upload(fs); }}>
@@ -2405,7 +2381,9 @@ function ProjectOneDrive({ e, reload }) {
             ))}
           </div>
         )}
-        <p className="muted small" style={{ marginTop: 10 }}>Drag files from your computer onto this list to upload them. NDAs, letters and invoices made in Solonos land in this folder by themselves.</p>
+        {trail.length > 1 ? (
+          <div style={{ marginTop: 12 }}><DropZone busy={busy} onFiles={(fs) => upload([...fs])} label={`Drop files here to upload them into ${here.name}, or click to choose (up to 25 MB each; bigger files: Open in OneDrive)`} /></div>
+        ) : <p className="muted small" style={{ marginTop: 10 }}>Open a folder (for example 4. Uploads), then drag files onto it. NDAs, letters and invoices made in Solonos land in these folders by themselves.</p>}
       </div>
     </Card>
   );
@@ -2454,6 +2432,70 @@ function LetterSlot({ e }) {
   );
 }
 
+/** Engagement tab, same for every project: the NDA and the engagement letter. */
+function EngagementTab({ e, agreements = [] }) {
+  const portal = agreements.filter((a) => a.status !== "void");
+  return (
+    <div className="grid2">
+      <div className="stack" style={{ gap: 16 }}><Card title="NDA"><NdaMaker engagement={e} /></Card></div>
+      <div className="stack" style={{ gap: 16 }}>
+        <LetterSlot e={e} />
+        {portal.length > 0 && (
+          <Card title="Signed on the client page">
+            <div className="stack" style={{ gap: 6 }}>
+              {portal.map((a) => <div key={a.id} className="row between small"><span>{a.kind === "nda" ? "NDA" : "Engagement letter"} v{a.version}</span><Chip kind={a.status === "signed" ? "ok" : "warn"}>{a.status === "signed" ? `signed ${day(a.signed_at)}` : "sent, not signed"}</Chip></div>)}
+              <span className="muted small">Copies are in OneDrive, folder 1. Engagement Letter &amp; NDA.</span>
+            </div>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Who the invoices are made out to. Edit here; every new invoice uses these details. */
+function BillTo({ e, reload }) {
+  const [run, busy] = useAction();
+  const [f, setF] = useState(null);
+  const set = (k) => (x) => setF({ ...f, [k]: x.target.value });
+  const save = () => run(async () => { const { error } = await supabase.from("engagements").update(f).eq("id", e.id); if (error) throw new Error(error.message); setF(null); await reload(); }, "Invoice details saved");
+  const lines = [e.company_name, e.client_name && `Attn: ${e.client_name}`, e.company_address, e.company_country, e.company_tax_id && `Tax / Reg. No. ${e.company_tax_id}`].filter(Boolean);
+  return (
+    <Card title="Invoice to" right={!f && <button className="btn" onClick={() => setF({ company_name: e.company_name ?? "", client_name: e.client_name ?? "", client_email: e.client_email ?? "", company_address: e.company_address ?? "", company_country: e.company_country ?? "", company_tax_id: e.company_tax_id ?? "" })}>Edit</button>}>
+      {f ? (
+        <div className="stack" style={{ gap: 10 }}>
+          <div className="grid2">
+            <Field label="Company"><input value={f.company_name} onChange={set("company_name")} /></Field>
+            <Field label="Contact person"><input value={f.client_name} onChange={set("client_name")} /></Field>
+          </div>
+          <Field label="Address"><textarea rows={2} value={f.company_address} onChange={set("company_address")} /></Field>
+          <div className="grid2">
+            <Field label="Country (decides which Consortia company invoices)"><input value={f.company_country} onChange={set("company_country")} /></Field>
+            <Field label="Tax / registration no."><input value={f.company_tax_id} onChange={set("company_tax_id")} /></Field>
+          </div>
+          <Field label="Email (where invoices are sent)"><input type="email" value={f.client_email} onChange={set("client_email")} /></Field>
+          <div className="row"><button className="btn primary" disabled={busy || !f.client_name.trim()} onClick={save}>Save</button><button className="btn" onClick={() => setF(null)}>Cancel</button></div>
+        </div>
+      ) : (
+        <div className="small">
+          {lines.length ? lines.map((l, i) => <div key={i} style={{ fontWeight: i === 0 ? 600 : 400 }}>{l}</div>) : <span className="muted">No details yet. Click Edit.</span>}
+          <div className="muted" style={{ marginTop: 6 }}>Issued by {e.company_country ? entityFor(e.company_country) : "Consortia Advisory LLP (UK) until a country is set"} · no VAT{e.client_email ? ` · sent to ${e.client_email}` : ""}</div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function InvoicingTab({ e, invoices, reload }) {
+  return (
+    <div className="stack" style={{ gap: 16, maxWidth: 900 }}>
+      <InvoiceSummary invoices={invoices} />
+      <BillTo e={e} reload={reload} />
+      <SimpleInvoices e={e} invoices={invoices} reload={reload} />
+    </div>
+  );
+}
+
 /** Any project that is not a valuation. Nothing goes to anyone unless you press a send button. */
 function SimpleEngagement({ e, invoices, feed, contact, reload }) {
   const [tab, setTab] = useProjectTab();
@@ -2468,13 +2510,8 @@ function SimpleEngagement({ e, invoices, feed, contact, reload }) {
         </div>
       )}
       {tab === "onedrive" && <div className="stack" style={{ gap: 16 }}><ProjectOneDrive e={e} reload={reload} /><AccessCard e={e} reload={reload} /></div>}
-      {tab === "engagement" && (
-        <div className="grid2">
-          <div className="stack" style={{ gap: 16 }}><Card title="NDA"><NdaMaker engagement={e} /></Card><LetterSlot e={e} /></div>
-          <div className="stack" style={{ gap: 16 }}>{e.opportunity_id && <NotesCard e={e} contact={contact} reload={reload} />}</div>
-        </div>
-      )}
-      {tab === "invoicing" && <div className="stack" style={{ gap: 16, maxWidth: 900 }}><InvoiceSummary invoices={invoices} /><SimpleInvoices e={e} invoices={invoices} reload={reload} /></div>}
+      {tab === "engagement" && <EngagementTab e={e} />}
+      {tab === "invoicing" && <InvoicingTab e={e} invoices={invoices} reload={reload} />}
     </>
   );
 }
@@ -2499,17 +2536,19 @@ function SimpleInvoices({ e, invoices, reload, bare }) {
       text: `Dear ${first},\n\nPlease find attached invoice ${no(i)} for ${money(i.amount, i.currency)}: ${invoiceName(i)}. The bank details are on the invoice.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory` });
   };
   const send = (m) => run(async () => { await callFn("engagement-send", { kind: "invoice_email", invoice_id: mail.inv.id, to: m.to, subject: m.subject, text: m.text }); setMail(null); await reload(); }, "Invoice emailed");
+  const issue = (i) => run(async () => { await callFn("engagement-send", { kind: "invoice_pdf", invoice_id: i.id, email: false }); await reload(); }, "Invoice numbered and PDF made. Nothing was emailed");
   return (
-    <Section bare={bare} title="Invoices" right={!form && <button className="btn" onClick={() => setForm({ description: `${typeLabel(e.engagement_type)}${e.company_name ? ` - ${e.company_name}` : ""}`, amount: "", currency: "EUR" })}>New invoice</button>}>
+    <Section bare={bare} title="Invoices" right={!form && <button className="btn primary" onClick={() => setForm({ description: `${typeLabel(e.engagement_type)}${e.company_name ? ` - ${e.company_name}` : ""}`, amount: "", currency: "EUR" })}>New invoice</button>}>
       {form && (
         <div className="card" style={{ padding: 12, background: "var(--sunken)", marginBottom: 12 }}>
           <div className="stack" style={{ gap: 10 }}>
             <Field label="What it is for (shown on the invoice)"><input value={form.description} onChange={(x) => setForm({ ...form, description: x.target.value })} /></Field>
+            <div className="row wrap" style={{ gap: 6 }}>{["Deposit", "First instalment (50%)", "Final instalment", "Retainer", "Success fee", "Additional work"].map((t) => <button key={t} className="btn" type="button" onClick={() => setForm({ ...form, description: `${typeLabel(e.engagement_type)}${e.company_name ? ` - ${e.company_name}` : ""} - ${t}` })}>{t}</button>)}</div>
             <div className="grid2">
               <Field label="Amount (no VAT)"><input type="number" min="0" step="50" value={form.amount} onChange={(x) => setForm({ ...form, amount: x.target.value })} placeholder="e.g. 2500" /></Field>
               <Field label="Currency"><select value={form.currency} onChange={(x) => setForm({ ...form, currency: x.target.value })}><option>EUR</option><option>GBP</option></select></Field>
             </div>
-            <p className="muted small" style={{ margin: 0 }}>Issued by {e.company_country ? entityFor(e.company_country) : "Consortia Advisory LLP (UK), since no country is set. Add the country in Client details first if the client is in the UK"}. The invoice gets its number now. Nothing is emailed.</p>
+            <p className="muted small" style={{ margin: 0 }}>Made out to the details in "Invoice to" above. It gets its number now; nothing is emailed until you press Email.</p>
             <div className="row">
               <button className="btn primary" disabled={busy || !(Number(form.amount) > 0) || !form.description.trim()} onClick={create}>Create invoice</button>
               <button className="btn" onClick={() => setForm(null)}>Cancel</button>
@@ -2521,7 +2560,8 @@ function SimpleInvoices({ e, invoices, reload, bare }) {
         <table className="table"><tbody>
           {invoices.map((i) => (
             <tr key={i.id}>
-              <td><div>{invoiceName(i)}</div><div className="muted small">{no(i) || "not issued"}{i.due_at && ` · due ${day(i.due_at)}`}</div></td>
+              <td><div>{invoiceName(i)}</div><div className="muted small">{no(i) || "not issued yet"}{i.due_at && ` · due ${day(i.due_at)}`}</div>
+                {i.client_claimed_at && i.status === "issued" && <div className="small" style={{ color: "var(--accent)", fontWeight: 600 }}>Client says paid {ago(i.client_claimed_at)}{i.client_reference ? ` · ref ${i.client_reference}` : ""}. Check the bank, then Mark paid.</div>}</td>
               <td style={{ textAlign: "right" }}>{money(i.amount, i.currency)}</td>
               <td style={{ textAlign: "right" }}>
                 <span className="row" style={{ justifyContent: "flex-end" }}>
@@ -2529,7 +2569,8 @@ function SimpleInvoices({ e, invoices, reload, bare }) {
                   {i.invoice_no && i.status !== "void" && <button className="btn" disabled={busy} onClick={() => write(i)}>Email…</button>}
                   {i.receipt_path && <button className="btn" onClick={() => open(i.receipt_path)}>Receipt</button>}
                   {i.status === "paid" && !i.receipt_path && <button className="btn" disabled={busy} onClick={() => receipt(i)}>Create receipt</button>}
-                  {i.status === "issued" ? <button className="btn" disabled={busy} onClick={() => paid(i)}>Mark paid</button> : <Chip kind={i.status === "paid" ? "ok" : ""}>{i.status}</Chip>}
+                  {i.status === "scheduled" && <button className="btn primary" disabled={busy} onClick={() => issue(i)}>Issue</button>}
+                  {i.status === "issued" ? <button className="btn" disabled={busy} onClick={() => paid(i)}>Mark paid</button> : i.status !== "scheduled" && <Chip kind={i.status === "paid" ? "ok" : ""}>{i.status}</Chip>}
                 </span>
               </td>
             </tr>
