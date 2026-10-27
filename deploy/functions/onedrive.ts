@@ -21,6 +21,7 @@
 //     (staff: anywhere inside the project folder; the client: only inside 4. Uploads or 5. Virtual Data Room)
 //   POST { action: "client_uploaded", engagement_id, name, folder }  logs the upload so staff see it (bell, digest)
 // Version 1.10 (27 Oct 2026): fix: the client could not open a file lying directly in 3/4/5 (the folder check compared paths that Graph had not returned); now walks up by parent id.
+//   Also: client_open reads the full item for the download link, with /content as fallback.
 // Version 1.9 (27 Oct 2026): uploads only into 4. Uploads (client page and client access); the Virtual Data Room is view and download for everyone.
 // Version 1.8 (27 Oct 2026): the client works from their Solonos page; files go to and from OneDrive without a Microsoft account.
 // Version 1.7 (23 Oct 2026): Microsoft lets an app share only with existing guests, so Solonos first adds the person as a
@@ -162,9 +163,15 @@ Deno.serve(async (req) => {
       }
       if (body.action === "client_open") {
         if (!(await inside(body.item, ["deliverables", "uploads", "vdr"]))) return json({ error: "not your file" }, 403);
-        const it: any = await g(`/drives/${e.onedrive_drive_id}/items/${body.item}?$select=id,name,file,@microsoft.graph.downloadUrl`);
+        const it: any = await g(`/drives/${e.onedrive_drive_id}/items/${body.item}`);     // the full item carries @microsoft.graph.downloadUrl (a $select of it is unreliable)
+        let url: string | undefined = it["@microsoft.graph.downloadUrl"];
+        if (!url) {                                                                          // fallback: /content answers with a redirect to a short-lived link
+          const r = await fetch(`${G}/drives/${e.onedrive_drive_id}/items/${body.item}/content`, { headers: { Authorization: `Bearer ${await graphToken()}` }, redirect: "manual" });
+          url = r.headers.get("location") ?? undefined;
+        }
+        if (!url) return json({ error: "Microsoft gave no download link for this file" }, 502);
         await db.from("engagements").update({ last_client_activity_at: new Date().toISOString() }).eq("id", e.id);
-        return json({ ok: true, url: it["@microsoft.graph.downloadUrl"], name: it.name });
+        return json({ ok: true, url, name: it.name });
       }
       if (body.action === "client_uploaded") {
         await db.from("activity_log").insert({ engagement_id: e.id, actor: mine.client_email, action: "client.uploaded", detail: { label: String(body.name || "").slice(0, 200), folder: body.folder === "vdr" ? SUB.vdr : SUB.uploads }, visible_to_client: true });
