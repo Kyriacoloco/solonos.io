@@ -15,6 +15,12 @@
 //   POST { action: "grant", engagement_id, email, scope: "folder", folder_id, role, expires_at }  a buyer: one folder inside 5 Virtual Data Room
 //   POST { action: "revoke", engagement_id, access_id }                                    removes that access in OneDrive
 //   POST { action: "vdr_folders", engagement_id }                                         folders inside the data room (two levels), for the picker
+//   POST { action: "client_list", engagement_id, folder: "deliverables"|"uploads"|"vdr", item? }   the client's page lists their folders
+//   POST { action: "client_open", engagement_id, item }       a short-lived download link for one file in those folders
+//   POST { action: "upload_session", engagement_id, item, name, size }   a Microsoft upload link; the browser sends the file straight to OneDrive
+//     (staff: anywhere inside the project folder; the client: only inside 4. Uploads or 5. Virtual Data Room)
+//   POST { action: "client_uploaded", engagement_id, name, folder }  logs the upload so staff see it (bell, digest)
+// Version 1.8 (27 Oct 2026): the client works from their Solonos page; files go to and from OneDrive without a Microsoft account.
 // Version 1.7 (23 Oct 2026): Microsoft lets an app share only with existing guests, so Solonos first adds the person as a
 //   guest of the Consortia tenant (Graph /invitations, no Microsoft email; needs the User.Invite.All application permission).
 // Version 1.6 (23 Oct 2026): Microsoft grants the access without its own email (it refuses to send one for an app);
@@ -115,8 +121,66 @@ Deno.serve(async (req) => {
   }
   const me = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } }, auth: { persistSession: false } });
   const { data: isStaff } = await me.rpc("is_staff");
-  if (!isStaff) return json({ error: "staff only" }, 403);
+  const clientAction = ["client_list", "client_open", "client_uploaded"].includes(body.action) || (body.action === "upload_session" && !isStaff);
+  if (!isStaff && !clientAction) return json({ error: "staff only" }, 403);
   try {
+    // ---- the client's own page: only their engagement, only folders 3, 4 and 5
+    if (clientAction) {
+      const { data: mineRaw } = await me.rpc("portal_my_engagement");
+      const mine: any = Array.isArray(mineRaw) ? mineRaw[0] : mineRaw;
+      if (!mine?.id || mine.id !== body.engagement_id) return json({ error: "not your project" }, 403);
+      const { data: e } = await db.from("engagements").select("*").eq("id", mine.id).single();
+      if (!e?.onedrive_folder_id) return json({ ok: true, items: [], none: true });
+      const roots = new Map<string, any>();
+      for (const c of await children(e.onedrive_drive_id, e.onedrive_folder_id)) if (c.folder) roots.set(c.name, c);
+      const allowed: Record<string, any> = { deliverables: roots.get(SUB.deliv), uploads: roots.get(SUB.uploads), vdr: roots.get(SUB.vdr) };
+      const inside = async (itemId: string, keys: string[]) => {     // is this item one of (or inside one of) the allowed root folders?
+        for (const k of keys) if (allowed[k]?.id === itemId) return k;
+        const it: any = await g(`/drives/${e.onedrive_drive_id}/items/${itemId}?$select=id,parentReference`);
+        const p = decodeURIComponent(it.parentReference?.path ?? "");
+        for (const k of keys) {
+          const r = allowed[k]; if (!r) continue;
+          const rp = decodeURIComponent(`${r.parentReference?.path ?? ""}/${r.name}`);
+          if (p === rp || p.startsWith(rp + "/")) return k;
+        }
+        return null;
+      };
+      if (body.action === "client_list") {
+        const root = allowed[body.folder];
+        if (!root) return json({ ok: true, items: [], none: true });
+        const item = body.item && body.item !== root.id ? body.item : root.id;
+        if (item !== root.id && !(await inside(item, [body.folder]))) return json({ error: "not your folder" }, 403);
+        const items = (await children(e.onedrive_drive_id, item)).map((c) => pick(c, e.onedrive_drive_id))
+          .sort((x, y) => (Number(y.folder) - Number(x.folder)) || x.name.localeCompare(y.name, "en", { numeric: true }));
+        return json({ ok: true, items, root: root.id, canUpload: body.folder !== "deliverables" });
+      }
+      if (body.action === "client_open") {
+        if (!(await inside(body.item, ["deliverables", "uploads", "vdr"]))) return json({ error: "not your file" }, 403);
+        const it: any = await g(`/drives/${e.onedrive_drive_id}/items/${body.item}?$select=id,name,file,@microsoft.graph.downloadUrl`);
+        await db.from("engagements").update({ last_client_activity_at: new Date().toISOString() }).eq("id", e.id);
+        return json({ ok: true, url: it["@microsoft.graph.downloadUrl"], name: it.name });
+      }
+      if (body.action === "client_uploaded") {
+        await db.from("activity_log").insert({ engagement_id: e.id, actor: mine.client_email, action: "client.uploaded", detail: { label: String(body.name || "").slice(0, 200), folder: body.folder === "vdr" ? SUB.vdr : SUB.uploads }, visible_to_client: true });
+        await db.from("engagements").update({ last_client_activity_at: new Date().toISOString() }).eq("id", e.id);
+        return json({ ok: true });
+      }
+      // upload_session for the client: only into 4. Uploads or 5. Virtual Data Room
+      if (!(await inside(body.item, ["uploads", "vdr"]))) return json({ error: "you can upload only into Uploads or the Virtual Data Room" }, 403);
+      return json({ ok: true, ...(await uploadSession(e.onedrive_drive_id, body.item, body.name)) });
+    }
+    if (body.action === "upload_session") {   // staff: anywhere inside the project folder
+      const { data: en } = await db.from("engagements").select("onedrive_drive_id, onedrive_folder_id").eq("id", body.engagement_id).single();
+      if (!en?.onedrive_folder_id) throw new Error("This project has no OneDrive folder yet");
+      if (body.item !== en.onedrive_folder_id) {
+        const root: any = await g(`/drives/${en.onedrive_drive_id}/items/${en.onedrive_folder_id}?$select=name,parentReference`);
+        const rootPath = decodeURIComponent(`${root.parentReference?.path ?? ""}/${root.name}`);
+        const it: any = await g(`/drives/${en.onedrive_drive_id}/items/${body.item}?$select=parentReference`);
+        const p = decodeURIComponent(it.parentReference?.path ?? "");
+        if (!(p === rootPath || p.startsWith(rootPath + "/"))) return json({ error: "Outside this project's folder" }, 403);
+      }
+      return json({ ok: true, ...(await uploadSession(en.onedrive_drive_id, body.item, body.name)) });
+    }
     // ---- the OneDrive tab on a project: any staff, but only inside that project's own folder
     if (["browse", "upload", "mkdir"].includes(body.action) && body.engagement_id) {
       const { data: en } = await db.from("engagements").select("onedrive_drive_id, onedrive_folder_id").eq("id", body.engagement_id).single();
@@ -376,4 +440,13 @@ async function revoke(db: any, e: any, match: (a: any) => boolean, why: string) 
   await db.from("engagements").update({ dataroom_shared: list }).eq("id", e.id);
   e.dataroom_shared = list;
   return list;
+}
+
+/** A Microsoft upload session: the browser PUTs the file to uploadUrl in chunks, no token needed, any size. */
+async function uploadSession(drive: string, parent: string, name: string) {
+  const r: any = await g(`/drives/${drive}/items/${parent}:/${encodeURIComponent(safeName(name))}:/createUploadSession`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ item: { "@microsoft.graph.conflictBehavior": "rename", name: safeName(name) } }),
+  });
+  return { uploadUrl: r.uploadUrl, expires: r.expirationDateTime };
 }
