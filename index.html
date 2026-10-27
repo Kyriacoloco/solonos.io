@@ -238,7 +238,7 @@ button.step:hover { color: var(--brand); }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.29";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.30";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -2413,7 +2413,7 @@ function ProjectOneDrive({ e, reload }) {
         {trail.length > 1 ? (
           <div style={{ marginTop: 12 }}>
             {prog && <div className="small" style={{ marginBottom: 8 }}>Uploading {prog.name}{prog.of > 1 ? ` (${prog.n} of ${prog.of})` : ""} · {Math.round(prog.pct * 100)}%<div style={{ height: 6, background: "var(--border-sub)", borderRadius: 3, marginTop: 4 }}><div style={{ width: `${Math.round(prog.pct * 100)}%`, height: 6, background: "var(--accent)", borderRadius: 3 }} /></div></div>}
-            <DropZone busy={busy} onFiles={(fs) => upload([...fs])} label={`Drop files here to upload them into ${here.name}, or click to choose. Any size.`} />
+            <DropZone busy={busy} onFiles={(fs) => upload([...fs])} label={`Drop files here to upload them into ${here.name}, or click to choose.`} hint="Any type, any size." />
           </div>
         ) : <p className="muted small" style={{ marginTop: 10 }}>Open a folder (for example 4. Uploads), then drag files onto it. NDAs, letters and invoices made in Solonos land in these folders by themselves.</p>}
       </div>
@@ -3050,18 +3050,19 @@ function LetterCard({ e, reload, agreements }) {
 }
 
 /** Drop files here or click to pick them (several at once). */
-function DropZone({ onFiles, busy, label = "Drop files here or click to choose" }) {
+function DropZone({ onFiles, busy, disabled, label = "Drop files here or click to choose", hint = "PDF, Word, Excel, images · up to 50 MB each" }) {
   const [over, setOver] = useState(false);
-  const pick = (fs) => { if (fs?.length && !busy) onFiles(fs); };
+  const off = busy || disabled;
+  const pick = (fs) => { if (fs?.length && !off) onFiles(fs); };
   return (
     <label
       onDragOver={(x) => { x.preventDefault(); setOver(true); }}
       onDragLeave={() => setOver(false)}
       onDrop={(x) => { x.preventDefault(); setOver(false); pick(x.dataTransfer.files); }}
-      style={{ display: "block", border: `2px dashed ${over ? "var(--accent)" : "var(--border-dash)"}`, background: over ? "#E6EEF2" : "var(--sunken)", borderRadius: 10, padding: "18px 14px", textAlign: "center", cursor: busy ? "default" : "pointer", transition: "background .15s, border-color .15s" }}>
+      style={{ display: "block", border: `2px dashed ${over ? "var(--accent)" : "var(--border-dash)"}`, background: over ? "#E6EEF2" : "var(--sunken)", borderRadius: 10, padding: "18px 14px", textAlign: "center", cursor: off ? "default" : "pointer", opacity: disabled ? .6 : 1, transition: "background .15s, border-color .15s" }}>
       <div className="small" style={{ fontWeight: 600, color: over ? "var(--accent)" : "var(--text-2)" }}>{busy ? "Uploading…" : label}</div>
-      <div className="muted small" style={{ marginTop: 2 }}>PDF, Word, Excel, images · up to 50 MB each</div>
-      <input type="file" multiple disabled={busy} style={{ display: "none" }} onChange={(x) => { pick(x.target.files); x.target.value = ""; }} />
+      {hint && <div className="muted small" style={{ marginTop: 2 }}>{hint}</div>}
+      <input type="file" multiple disabled={off} style={{ display: "none" }} onChange={(x) => { pick(x.target.files); x.target.value = ""; }} />
     </label>
   );
 }
@@ -3826,7 +3827,7 @@ function ClientDocuments({ e, preview }) {
           {canUpload && (
             <div style={{ marginTop: 12 }}>
               {prog && <div className="small" style={{ marginBottom: 8 }}>Uploading {prog.name}{prog.of > 1 ? ` (${prog.n} of ${prog.of})` : ""} · {Math.round(prog.pct * 100)}%<div style={{ height: 6, background: "var(--border-sub)", borderRadius: 3, marginTop: 4 }}><div style={{ width: `${Math.round(prog.pct * 100)}%`, height: 6, background: "var(--accent)", borderRadius: 3 }} /></div></div>}
-              <DropZone busy={busy || preview} onFiles={(fs) => !preview && upload([...fs])} label={preview ? "Upload box (switched off in the staff preview)" : `Drop files here${here ? ` (into ${here.name})` : ""}, or click to choose. Any size, as many as you need.`} />
+              <DropZone busy={busy} disabled={preview} onFiles={(fs) => !preview && upload([...fs])} label={preview ? "Upload box (switched off in the staff preview)" : `Drop files here${here ? ` (into ${here.name})` : ""}, or click to choose.`} hint="Any type, any size, as many as you need. Files go straight into your Uploads folder." />
             </div>
           )}
         </>
