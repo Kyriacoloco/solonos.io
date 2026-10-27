@@ -479,6 +479,14 @@ Deno.serve(async (req) => {
     const attachments: { filename: string; contentBase64: string; contentType: string }[] = [];
     const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
+    if (kind === "invite" && String(body.email_text || "").trim()) {
+      // ---- 3.23: the invitation written in Solonos (any project type); nothing else attached
+      const html = shell(`${textToHtml(String(body.email_text).trim())}${button(PORTAL(), "Open your Solonos page")}<p style="font-size:13px;color:#6B5457">Sign in with this email address (${e.client_email}); you'll receive a one-time code, no password needed.</p>`);
+      await sendEmail({ to: String(body.email || e.client_email), subject: String(body.email_subject || `Your Solonos page - ${e.company_name || e.client_name}`), html, attachments: [] });
+      await db.from("engagements").update({ sent_at: new Date().toISOString() }).eq("id", e.id);
+      await db.from("activity_log").insert({ engagement_id: e.id, actor: "staff", action: "invite.sent", detail: { custom: true }, visible_to_client: true });
+      return json({ ok: true });
+    }
     if (kind === "invite") {
       // ---- welcome email with the portal link, plus the deposit invoice when a deposit applies
       let depositLine = "";
