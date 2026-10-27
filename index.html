@@ -238,7 +238,7 @@ button.step:hover { color: var(--brand); }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.27";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.28";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -2153,7 +2153,7 @@ function EngagementDetail() {
   useEffect(() => { load(); }, [load]);
 
   if (!e) return null;
-  if (isSimple(e)) return <SimpleEngagement e={e} invoices={invoices} feed={feed} contact={contact} reload={load} />;
+  if (isSimple(e)) return <SimpleEngagement e={e} invoices={invoices} feed={feed} contact={contact} reload={load} docs={docs} />;
   return <ValuationProject e={e} deposit={deposit} invoices={invoices} docs={docs} agreements={agreements} feed={feed} contact={contact} reload={load} />;
 }
 
@@ -2172,6 +2172,7 @@ function ValuationProject({ e, deposit, invoices, docs, agreements, feed, contac
         <div className="grid2">
           <div className="stack" style={{ gap: 16 }}>
             <ClientPageCard e={e} reload={reload} />
+            <RequestListCard e={e} docs={docs} reload={reload} />
             <ProjectTasks e={e} />
             <QuickNotes e={e} />
           </div>
@@ -2487,6 +2488,112 @@ function DocSlot({ e, kind, title, docName, what, extra }) {
   );
 }
 
+/** The document request list for this project. Written per project; the client sees it on their page with an Upload button per item. */
+const REQUEST_TEMPLATES = {
+  valuation: `A. Financial
+Annual financial statements for the last 3 years
+Management accounts, year to date
+Budget or forecast for the next 12 months
+Loans, leasing and any money owed between you and the company
+B. Company
+Company documents, shareholders and ownership percentages
+Main contracts with customers and suppliers`,
+  sell_side: `A. Financial
+Annual financial statements for the last 5 years
+Monthly management accounts for the last 24 months and this year to date
+Revenue by month for 36 months, by product or service
+All costs by category for 24 months
+Personal or one-off costs paid by the company, including your own pay
+Budget and five-year plan
+Loans, leasing and any money owed between you and the company
+Tax returns for the last 4 years and any letters from the tax office
+B. Commercial
+List of customers with revenue per year
+Main contracts and their renewal dates
+Pipeline and growth plan
+Existing brochure and sales material
+C. Operational
+Company history
+Who does what, including freelancers, and your own role day to day
+Systems and accounts you use, and whose name they are in
+Company documents, shareholders and ownership percentages
+Any disputes, guarantees or contracts that need consent if the company is sold`,
+};
+/** "A. Financial" or "Financial:" starts a section; a leading number is dropped. */
+const parseRequestLines = (text) => {
+  const out = []; let section = null;
+  for (const raw of String(text).split("\n")) {
+    const line = raw.trim(); if (!line) continue;
+    if (/^[A-Z]\.\s+\S/.test(line) || /^#+\s/.test(line) || (/:$/.test(line) && !/^\d/.test(line))) { section = line.replace(/^#+\s*/, "").replace(/:$/, ""); continue; }
+    out.push({ section, label: line.replace(/^\d+[.)]?\s*/, "").replace(/^[-•]\s*/, "") });
+  }
+  return out;
+};
+function RequestListCard({ e, docs, reload }) {
+  const [run, busy] = useAction();
+  const [paste, setPaste] = useState(null);
+  const [adding, setAdding] = useState("");
+  const items = [...docs].sort((a, b) => (a.sort_order - b.sort_order) || (new Date(a.created_at) - new Date(b.created_at)));
+  const received = items.filter((d) => d.uploaded_at).length;
+  const sections = [...new Set(items.map((d) => d.section || ""))];
+  const nextOrder = () => (items.length ? Math.max(...items.map((d) => d.sort_order || 0)) + 1 : 1);
+  const addMany = (text) => run(async () => {
+    const rows = parseRequestLines(text); if (!rows.length) throw new Error("Nothing to add");
+    let n = nextOrder();
+    const { error } = await supabase.from("client_documents").insert(rows.map((r) => ({ engagement_id: e.id, label: r.label, section: r.section, sort_order: n++, required: true })));
+    if (error) throw new Error(error.message);
+    setPaste(null); setAdding(""); await reload();
+  }, "List updated");
+  const toggle = (d) => run(async () => { const { error } = await supabase.from("client_documents").update(d.uploaded_at ? { uploaded_at: null, uploaded_by: null } : { uploaded_at: new Date().toISOString(), uploaded_by: "staff" }).eq("id", d.id); if (error) throw new Error(error.message); await reload(); });
+  const remove = (d) => run(async () => { const { error } = await supabase.from("client_documents").delete().eq("id", d.id); if (error) throw new Error(error.message); await reload(); }, "Removed");
+  const open = (f) => window.open(f.url, "_blank", "noopener");
+  return (
+    <Card title={`Documents we need${items.length ? ` · ${received} of ${items.length} received` : ""}`} right={!paste && <button className="btn" onClick={() => setPaste(items.length ? "" : (REQUEST_TEMPLATES[e.engagement_type] ?? REQUEST_TEMPLATES.valuation))}>{items.length ? "Paste more" : "Start the list"}</button>}>
+      {paste !== null && (
+        <div className="card" style={{ padding: 12, background: "var(--sunken)", marginBottom: 12 }}>
+          <div className="stack" style={{ gap: 8 }}>
+            <span className="small">One item per line. A line like <strong>A. Financial</strong> or <strong>Financial:</strong> starts a section. Numbers at the start are dropped.</span>
+            <textarea rows={12} value={paste} onChange={(x) => setPaste(x.target.value)} style={{ width: "100%", fontFamily: "inherit" }} />
+            <div className="row wrap">
+              <button className="btn primary" disabled={busy || !paste.trim()} onClick={() => addMany(paste)}>Add {parseRequestLines(paste).length} items</button>
+              {Object.entries(REQUEST_TEMPLATES).map(([k, t]) => <button key={k} className="btn" onClick={() => setPaste(t)}>Use the {typeLabel(k).toLowerCase()} template</button>)}
+              <button className="btn" onClick={() => setPaste(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {items.length === 0 && paste === null && <span className="muted small">No list yet. Click "Start the list": a template appears that you can edit, or paste your own.</span>}
+      {sections.map((sec) => (
+        <div key={sec || "_"} style={{ marginBottom: 10 }}>
+          {sec && <h3 style={{ margin: "8px 0 4px" }}>{sec}</h3>}
+          <div className="stack" style={{ gap: 4 }}>
+            {items.filter((d) => (d.section || "") === sec).map((d) => (
+              <div key={d.id} className="row between small" style={{ gap: 8, alignItems: "flex-start" }}>
+                <label className="check" style={{ flex: 1, minWidth: 0, alignItems: "flex-start" }}>
+                  <input type="checkbox" checked={!!d.uploaded_at} onChange={() => toggle(d)} disabled={busy} />
+                  <span>
+                    <span style={{ textDecoration: d.uploaded_at ? "line-through" : "none", opacity: d.uploaded_at ? .7 : 1 }}>{d.label}</span>
+                    {(d.files ?? []).length > 0 && <div className="muted">{(d.files ?? []).map((f, i) => <span key={i}>{i > 0 && " · "}<a href="#" onClick={(x) => { x.preventDefault(); open(f); }}>{f.name}</a></span>)}</div>}
+                    {d.client_note && <div style={{ color: "var(--accent)" }}>Client: {d.client_note}</div>}
+                  </span>
+                </label>
+                <button className="btn" disabled={busy} onClick={() => remove(d)} title="Remove">✕</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      {items.length > 0 && paste === null && (
+        <div className="row" style={{ gap: 6, marginTop: 6 }}>
+          <input style={{ flex: 1 }} value={adding} onChange={(x) => setAdding(x.target.value)} onKeyDown={(x) => x.key === "Enter" && adding.trim() && addMany(adding)} placeholder="Add one item…" />
+          <button className="btn" disabled={busy || !adding.trim()} onClick={() => addMany(adding)}>Add</button>
+        </div>
+      )}
+      <p className="muted small" style={{ margin: "8px 0 0" }}>The client sees this list on their page with an Upload button per item. Files go into 4. Uploads in OneDrive. Tick an item yourself if it arrived another way.</p>
+    </Card>
+  );
+}
+
 /** Invite the client to their Solonos page (progress, folders, documents to sign, invoices), with your own email. */
 function ClientPageCard({ e, reload }) {
   const [run, busy] = useAction();
@@ -2577,7 +2684,7 @@ function InvoicingTab({ e, invoices, reload }) {
 }
 
 /** Any project that is not a valuation. Nothing goes to anyone unless you press a send button. */
-function SimpleEngagement({ e, invoices, feed, contact, reload }) {
+function SimpleEngagement({ e, invoices, feed, contact, reload, docs }) {
   const [tab, setTab] = useProjectTab();
   return (
     <>
@@ -2585,7 +2692,7 @@ function SimpleEngagement({ e, invoices, feed, contact, reload }) {
       <ProjectTabs tab={tab} setTab={setTab} e={e} />
       {tab === "overview" && (
         <div className="grid2">
-          <div className="stack" style={{ gap: 16 }}><ClientPageCard e={e} reload={reload} /><ProjectTasks e={e} /><QuickNotes e={e} /></div>
+          <div className="stack" style={{ gap: 16 }}><ClientPageCard e={e} reload={reload} /><RequestListCard e={e} docs={docs} reload={reload} /><ProjectTasks e={e} /><QuickNotes e={e} /></div>
           <div className="stack" style={{ gap: 16 }}><ClientDetails e={e} reload={reload} /><ActivityCard e={e} feed={feed} /></div>
         </div>
       )}
@@ -3330,7 +3437,8 @@ function describe(f, who = "Client") {
     case "client.company_updated": return `${who} updated their company details`;
     case "client.company_confirmed": return `${who} confirmed their company details`;
     case "letter.drafted": return `Engagement letter draft v${d.version} created for review (fee ${eur(d.fee)})`;
-    case "client.uploaded": return `${who} uploaded: ${d.label}`;
+    case "client.uploaded": return `${who} uploaded: ${d.label}${d.file ? ` (${d.file})` : ""}`;
+    case "client.note": return `${who} noted on "${d.label}": ${d.note}`;
     case "deposit.paid": return `Deposit received by bank transfer${d.reference ? ` (${d.reference})` : ""}`;
     case "invoice.issued": return `${INVOICE_NAMES[d.seq]} issued, #${d.no}, ${eur(d.amount)}`;
     case "invoice.paid": return `${INVOICE_NAMES[d.seq]} paid`;
@@ -3674,7 +3782,7 @@ function Portal({ session }) {
     </div></div>
   );
 
-  return <PortalHome e={e} agreements={agreements} invoices={invoices} reload={load} preview={preview} />;
+  return <PortalHome e={e} agreements={agreements} invoices={invoices} docs={docs} feed={feed} reload={load} preview={preview} />;
 }
 
 /** The client's documents: Deliverables (ours, read only), Uploads (theirs), Virtual Data Room (sell-side). All in OneDrive, shown here. */
@@ -3736,8 +3844,78 @@ function ClientDocuments({ e, preview }) {
   );
 }
 
+/** The client's request list: one row per item, Upload per item (file goes to OneDrive 4. Uploads), a note when something is missing. */
+function ClientRequestList({ e, docs, reload, preview }) {
+  const [run, busy] = useAction();
+  const [prog, setProg] = useState(null);
+  const [noteFor, setNoteFor] = useState(null);     // { id, text }
+  const inpRef = useRef(null);
+  const [target, setTarget] = useState(null);
+  const items = [...docs].sort((a, b) => (a.sort_order - b.sort_order) || (new Date(a.created_at) - new Date(b.created_at)));
+  if (!items.length) return null;
+  const received = items.filter((d) => d.uploaded_at).length;
+  const sections = [...new Set(items.map((d) => d.section || ""))];
+  const pick = (d) => { setTarget(d); inpRef.current?.click(); };
+  const upload = (d, files) => run(async () => {
+    const list = [...files]; if (!list.length) return;
+    const root = (await callFn("onedrive", { action: "client_list", engagement_id: e.id, folder: "uploads" })).root;
+    if (!root) throw new Error("Your upload folder is not ready yet. Please try again in a few minutes.");
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      setProg({ id: d.id, name: f.name, pct: 0 });
+      const item = await uploadToOneDrive({ engagementId: e.id, item: root, file: f, onProgress: (p) => setProg({ id: d.id, name: f.name, pct: p }) });
+      await rpc("portal_request_file", { p_doc: d.id, p_name: f.name, p_item: item?.id ?? null, p_url: item?.webUrl ?? null });
+    }
+    setProg(null); await reload();
+  }, "Received, thank you.").then(() => setProg(null));
+  const saveNote = () => run(async () => { await rpc("portal_request_note", { p_doc: noteFor.id, p_note: noteFor.text }); setNoteFor(null); await reload(); }, "Noted, thank you.");
+  return (
+    <Card title={`Documents we need from you · ${received} of ${items.length} received`}>
+      <input ref={inpRef} type="file" multiple style={{ display: "none" }} onChange={(x) => { const fs = [...(x.target.files ?? [])]; x.target.value = ""; if (target && fs.length) upload(target, fs); }} />
+      <p className="small" style={{ margin: "0 0 10px" }}>Send what you have as it is. Use Upload on each line; any size, several files at once. If something does not exist, tell us with "Note".</p>
+      {sections.map((sec) => (
+        <div key={sec || "_"} style={{ marginBottom: 10 }}>
+          {sec && <h3 style={{ margin: "8px 0 4px" }}>{sec}</h3>}
+          <div className="stack" style={{ gap: 4 }}>
+            {items.filter((d) => (d.section || "") === sec).map((d, i) => (
+              <div key={d.id} className="row between small" style={{ gap: 8, alignItems: "flex-start", padding: "6px 8px", borderRadius: 8, background: d.uploaded_at ? "transparent" : "var(--sunken)" }}>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ color: d.uploaded_at ? "var(--ok)" : "var(--text-3)", marginRight: 6 }}>{d.uploaded_at ? "✓" : "○"}</span>
+                  <span style={{ opacity: d.uploaded_at ? .7 : 1 }}>{d.label}</span>
+                  {(d.files ?? []).length > 0 && <div className="muted" style={{ marginLeft: 18 }}>{(d.files ?? []).map((f) => f.name).join(" · ")}</div>}
+                  {d.client_note && <div className="muted" style={{ marginLeft: 18 }}>Your note: {d.client_note}</div>}
+                  {prog?.id === d.id && <div style={{ marginLeft: 18 }}>Uploading {prog.name} · {Math.round(prog.pct * 100)}%<div style={{ height: 5, background: "var(--border-sub)", borderRadius: 3, marginTop: 3, maxWidth: 320 }}><div style={{ width: `${Math.round(prog.pct * 100)}%`, height: 5, background: "var(--accent)", borderRadius: 3 }} /></div></div>}
+                  {noteFor?.id === d.id && <div className="row" style={{ gap: 6, marginTop: 6, marginLeft: 18 }}><input autoFocus style={{ flex: 1 }} value={noteFor.text} onChange={(x) => setNoteFor({ ...noteFor, text: x.target.value })} placeholder="e.g. We do not have this; the accountant keeps it" /><button className="btn primary" disabled={busy} onClick={saveNote}>Save</button><button className="btn" onClick={() => setNoteFor(null)}>Cancel</button></div>}
+                </span>
+                {!preview && <span className="row" style={{ flex: "none" }}><button className="btn" disabled={busy} onClick={() => setNoteFor({ id: d.id, text: d.client_note ?? "" })}>Note</button><button className={`btn${d.uploaded_at ? "" : " primary"}`} disabled={busy} onClick={() => pick(d)}>{d.uploaded_at ? "Add more" : "Upload"}</button></span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+/** Everything the client needs to do now, each in one click. */
+function WaitingForYou({ toSign, docs, invoices, onSign }) {
+  const missing = docs.filter((d) => !d.uploaded_at).length;
+  const unpaid = invoices.filter((i) => i.status === "issued");
+  const rows = [
+    ...toSign.map((a) => ({ key: a.id, text: `Sign the ${a.kind === "nda" ? "Non-Disclosure Agreement" : "engagement letter"}`, btn: "Read and sign", go: () => onSign(a) })),
+    ...(missing ? [{ key: "docs", text: `Send ${missing} document${missing === 1 ? "" : "s"} from the list`, btn: "Go to the list", go: () => document.getElementById("request-list")?.scrollIntoView({ behavior: "smooth" }) }] : []),
+    ...unpaid.map((i) => ({ key: i.id, text: `Pay invoice ${i.issuing_entity}-${String(i.invoice_no).padStart(4, "0")} · ${money(i.amount, i.currency)}`, btn: "See invoice", go: () => document.getElementById("invoices")?.scrollIntoView({ behavior: "smooth" }) })),
+  ];
+  if (!rows.length) return <Card title="Waiting for you"><span className="small" style={{ color: "var(--ok)" }}>Nothing right now. We'll email you when something needs your attention.</span></Card>;
+  return (
+    <Card title={`Waiting for you (${rows.length})`}>
+      <div className="stack" style={{ gap: 6 }}>{rows.map((r) => <div key={r.key} className="row between small"><span>○ {r.text}</span><button className="btn primary" onClick={r.go}>{r.btn}</button></div>)}</div>
+    </Card>
+  );
+}
+
 /** The client's page: where the project stands, their folders, anything to sign, and invoices. */
-function PortalHome({ e, agreements, invoices, reload, preview }) {
+function PortalHome({ e, agreements, invoices, docs = [], feed = [], reload, preview }) {
   const [signing, setSigning] = useState(null);
   const open = async (path) => window.open(await signedUrl(path), "_blank");
   const mine = (Array.isArray(e.dataroom_shared) ? e.dataroom_shared : []).find((a) => a.scope === "client" && !a.revoked_at);
@@ -3770,6 +3948,8 @@ function PortalHome({ e, agreements, invoices, reload, preview }) {
         ) : (
           <div className="grid2">
             <div className="stack" style={{ gap: 16 }}>
+              <WaitingForYou toSign={toSign} docs={docs} invoices={invoices} onSign={setSigning} />
+              <div id="request-list"><ClientRequestList e={e} docs={docs} reload={reload} preview={preview} /></div>
               <ClientDocuments e={e} preview={preview} />
               {mine && <p className="muted small" style={{ margin: 0 }}>You can also open these folders in OneDrive: {(mine.items ?? []).map((it, i) => <React.Fragment key={it.item}>{i > 0 && " · "}<a href={it.url} target="_blank" rel="noreferrer">{nice(it.name)}</a></React.Fragment>)}</p>}
               {(toSign.length > 0 || signed.length > 0) && (
@@ -3782,7 +3962,7 @@ function PortalHome({ e, agreements, invoices, reload, preview }) {
               )}
             </div>
             <div className="stack" style={{ gap: 16 }}>
-              <Card title="Invoices">
+              <div id="invoices" /><Card title="Invoices">
                 {invoices.length === 0 ? <span className="muted small">None yet.</span> : (
                   <table className="table"><tbody>
                     {invoices.map((i) => (
@@ -3795,6 +3975,9 @@ function PortalHome({ e, agreements, invoices, reload, preview }) {
                   </tbody></table>
                 )}
                 {invoices.some((i) => i.status === "issued") && <p className="muted small" style={{ margin: "8px 0 0" }}>Paid by bank transfer? Click Mark payment and add your reference; we confirm and send the receipt.</p>}
+              </Card>
+              <Card title="Activity">
+                {feed.length === 0 ? <span className="muted small">Nothing yet.</span> : <ul className="feed">{feed.slice(0, 12).map((f) => <li key={f.id}><span className="when">{ago(f.created_at)}</span><span>{describe(f, "You")}</span></li>)}</ul>}
               </Card>
             </div>
           </div>
