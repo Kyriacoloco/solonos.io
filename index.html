@@ -238,7 +238,7 @@ button.step:hover { color: var(--brand); }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.30";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.31";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -3942,8 +3942,6 @@ function PortalHome({ e, agreements, invoices, docs = [], feed = [], reload, pre
             <div className="stack" style={{ gap: 16 }}>
               <WaitingForYou toSign={toSign} docs={docs} invoices={invoices} onSign={setSigning} />
               <div id="request-list"><ClientRequestList e={e} docs={docs} reload={reload} preview={preview} /></div>
-              <ClientDocuments e={e} preview={preview} />
-              {mine && <p className="muted small" style={{ margin: 0 }}>You can also open these folders in OneDrive: {(mine.items ?? []).map((it, i) => <React.Fragment key={it.item}>{i > 0 && " · "}<a href={it.url} target="_blank" rel="noreferrer">{nice(it.name)}</a></React.Fragment>)}</p>}
               {(toSign.length > 0 || signed.length > 0) && (
                 <Card title="Engagement">
                   <div className="stack" style={{ gap: 8 }}>
@@ -3954,6 +3952,8 @@ function PortalHome({ e, agreements, invoices, docs = [], feed = [], reload, pre
               )}
             </div>
             <div className="stack" style={{ gap: 16 }}>
+              <ClientDocuments e={e} preview={preview} />
+              {mine && <p className="muted small" style={{ margin: 0 }}>You can also open these folders in OneDrive: {(mine.items ?? []).map((it, i) => <React.Fragment key={it.item}>{i > 0 && " · "}<a href={it.url} target="_blank" rel="noreferrer">{nice(it.name)}</a></React.Fragment>)}</p>}
               <div id="invoices" /><Card title="Invoices">
                 {invoices.length === 0 ? <span className="muted small">None yet.</span> : (
                   <table className="table"><tbody>
