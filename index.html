@@ -238,7 +238,7 @@ button.step:hover { color: var(--brand); }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.24";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.25";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -273,17 +273,15 @@ const APPROACHES = [
 const INVOICE_NAMES = { 0: "Deposit (€1,000)", 1: "Invoice 1 (on signing)", 2: "Invoice 2 (before final report)" };
 const invoiceName = (i) => i.description || INVOICE_NAMES[i.seq] || `Invoice ${i.seq}`;
 /** Engagement types (same list as the OneDrive project folders). Valuations keep the full funnel flow; the rest are simple. */
-const ENG_TYPES = [["valuation", "Business Valuation"], ["sell_side", "Sell-side M&A"], ["ma", "M&A"], ["business_plan", "Business Plan"], ["feasibility", "Feasibility Study"],
-  ["financial_modeling", "Financial Modelling"], ["transfer_pricing", "Transfer Pricing"], ["teaser", "Teaser"], ["form_8802", "8802 Form"], ["restructuring", "Restructuring Report"], ["cfo", "CFO Services"], ["other", "Other"]];
+const ENG_TYPES = [["valuation", "Business Valuation"], ["sell_side", "Sell-side M&A"]];
 /** The client-facing process for each type of engagement. Kyriacos moves the project along; the client sees where it is. */
 const PROCESS = {
   valuation: ["Engagement", "Your documents", "Valuation draft", "Review", "Completion"],
   sell_side: ["Value and prepare", "Go to market", "Offers", "Negotiate and complete"],
-  ma: ["Engagement", "Search and screening", "Offers", "Negotiate and complete"],
   default: ["Engagement", "Your documents", "Work in progress", "Review", "Completion"],
 };
 const processFor = (t) => PROCESS[t || "valuation"] ?? PROCESS.default;
-const typeLabel = (t) => ENG_TYPES.find(([k]) => k === (t || "valuation"))?.[1] ?? "Other";
+const typeLabel = (t) => ENG_TYPES.find(([k]) => k === (t || "valuation"))?.[1] ?? "Project";
 const isSimple = (e) => (e?.engagement_type || "valuation") !== "valuation";
 /** Stage shown for an engagement: valuations use the funnel stages; simple engagements are Open, Project active, Completed or Declined. */
 const engStageLabel = (e) => !isSimple(e) ? stageLabel(e.stage) : e.stage === "valuation_active" ? "In progress" : e.stage === "completed" ? "Completed" : e.stage === "declined" ? "Did not go ahead" : "Open";
@@ -2429,44 +2427,47 @@ function ProjectOneDrive({ e, reload }) {
 }
 
 /** Engagement letter for projects that are not valuations: write it in Word, upload it, email it, upload the signed copy. */
-function LetterSlot({ e }) {
+function LetterSlot({ e }) { return <DocSlot e={e} kind="engagement_letter" title="Engagement letter" docName="Engagement Letter" what="our engagement letter" />; }
+
+/** Upload a document, email it, upload the signed copy. Used for the NDA and the engagement letter. */
+function DocSlot({ e, kind, title, docName, what, extra }) {
   const [run, busy] = useAction();
   const [docs, setDocs] = useState([]);
   const [mail, setMail] = useState(null);
   const load = useCallback(async () => {
-    const { data } = await supabase.from("documents").select("*").eq("engagement_id", e.id).eq("kind", "engagement_letter").order("created_at", { ascending: false });
+    const { data } = await supabase.from("documents").select("*").eq("engagement_id", e.id).eq("kind", kind).order("created_at", { ascending: false });
     setDocs(data ?? []);
-  }, [e.id]);
+  }, [e.id, kind]);
   useEffect(() => { load(); }, [load]);
   const who = e.company_name || e.client_name;
   const up = (file, signed) => { if (!file) return; run(async () => {
-    const name = `${who} - Engagement Letter${signed ? " - signed" : ""}`;
+    const name = `${who} - ${docName}${signed ? " - signed" : ""}`;
     const ext = (file.name.match(/\.[A-Za-z0-9]+$/) || [".pdf"])[0];
     const path = `${e.id}/${Date.now()}-${name.replace(/[^A-Za-z0-9.]+/g, "-")}${ext}`;
     const { error } = await supabase.storage.from("deliverables").upload(path, file);
     if (error) throw new Error(error.message);
-    const { error: e2 } = await supabase.from("documents").insert({ engagement_id: e.id, kind: "engagement_letter", name, storage_path: `deliverables/${path}`, visibility: "internal", uploaded_by: "staff", meta: { signed, signed_on: signed ? new Date().toISOString().slice(0, 10) : null } });
+    const { error: e2 } = await supabase.from("documents").insert({ engagement_id: e.id, kind, name, storage_path: `deliverables/${path}`, visibility: "internal", uploaded_by: "staff", meta: { signed, signed_on: signed ? new Date().toISOString().slice(0, 10) : null } });
     if (e2) throw new Error(e2.message);
     await load();
-  }, signed ? "Signed letter saved" : "Letter saved. Nothing was emailed"); };
+  }, signed ? "Signed copy saved" : "Saved. Nothing was emailed"); };
   const open = async (d) => window.open(await signedUrl(d.storage_path), "_blank");
-  const write = (d) => { const first = String(e.client_name || "").trim().split(/\s+/)[0]; setMail({ d, to: e.client_email || "", subject: d.name, text: `Dear ${first},\n\nPlease find attached our engagement letter. Please sign it and send it back by replying to this email.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory` }); };
-  const send = (m) => run(async () => { await callFn("engagement-send", { kind: "project_email", engagement_id: e.id, to: m.to, subject: m.subject, text: m.text, files: [mail.d.storage_path] }); setMail(null); }, "Letter emailed");
+  const write = (d) => { const first = String(e.client_name || "").trim().split(/\s+/)[0]; setMail({ d, to: e.client_email || "", subject: d.name, text: `Dear ${first},\n\nPlease find attached ${what}. Please sign it and send it back by replying to this email.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory` }); };
+  const send = (m) => run(async () => { await callFn("engagement-send", { kind: "project_email", engagement_id: e.id, to: m.to, subject: m.subject, text: m.text, files: [mail.d.storage_path] }); setMail(null); }, "Emailed");
   const signed = docs.some((d) => d.meta?.signed);
   const pick = (label, isSigned) => <label className="btn" style={{ cursor: "pointer" }}>{label}<input type="file" accept=".pdf,.doc,.docx" style={{ display: "none" }} onChange={(x) => { up(x.target.files?.[0], isSigned); x.target.value = ""; }} /></label>;
   return (
-    <Card title="Engagement letter" right={signed ? <Chip kind="ok">Signed</Chip> : null}>
+    <Card title={title} right={signed ? <Chip kind="ok">Signed</Chip> : null}>
       <div className="stack" style={{ gap: 6 }}>
-        {docs.length === 0 && <span className="muted small">No letter yet. Write it in Word, upload it here, then email it.</span>}
+        {docs.length === 0 && <span className="muted small">Nothing yet. Upload it here, then email it.</span>}
         {docs.map((d) => (
           <div key={d.id} className="row between small">
             <span>{d.name}{d.meta?.signed ? <span style={{ color: "var(--ok)" }}> ✓</span> : null}<div className="muted">{ago(d.created_at)}</div></span>
             <span className="row">{!d.meta?.signed && <button className="btn" disabled={busy} onClick={() => write(d)}>Email…</button>}<button className="btn" onClick={() => open(d)}>Open</button></span>
           </div>
         ))}
-        {!signed && <div className="row" style={{ marginTop: 6 }}>{pick(docs.length ? "Upload a new version" : "Upload letter", false)}{docs.length > 0 && pick("Upload signed copy", true)}</div>}
+        {!signed && <div className="row wrap" style={{ marginTop: 6 }}>{pick(docs.length ? "Upload a new version" : `Upload ${title === "NDA" ? "NDA" : title.toLowerCase()}`, false)}{pick("Upload signed copy", true)}{extra}</div>}
       </div>
-      {mail && <EmailDialog title="Email the engagement letter" to={mail.to} subject={mail.subject} text={mail.text} attached={`${mail.d.name}`} busy={busy} onSend={send} onCancel={() => setMail(null)} />}
+      {mail && <EmailDialog title={`Email the ${title === "NDA" ? "NDA" : title.toLowerCase()}`} to={mail.to} subject={mail.subject} text={mail.text} attached={`${mail.d.name}`} busy={busy} onSend={send} onCancel={() => setMail(null)} />}
     </Card>
   );
 }
@@ -2489,12 +2490,19 @@ function ClientPageCard({ e, reload }) {
   );
 }
 
+/** NDA: upload your own (like the engagement letter), or make one from our template. */
+function NdaCard({ e }) {
+  const [tpl, setTpl] = useState(false);
+  if (tpl) return <Card title="NDA from our template" right={<button className="btn" onClick={() => setTpl(false)}>Done</button>}><NdaMaker engagement={e} /></Card>;
+  return <DocSlot e={e} kind="nda" title="NDA" docName="Non Disclosure Agreement" what="our Non-Disclosure Agreement" extra={<button className="btn" onClick={() => setTpl(true)}>Make from our template</button>} />;
+}
+
 /** Engagement tab, same for every project: the NDA and the engagement letter. */
 function EngagementTab({ e, agreements = [] }) {
   const portal = agreements.filter((a) => a.status !== "void");
   return (
     <div className="grid2">
-      <div className="stack" style={{ gap: 16 }}><Card title="NDA"><NdaMaker engagement={e} /></Card></div>
+      <div className="stack" style={{ gap: 16 }}><NdaCard e={e} /></div>
       <div className="stack" style={{ gap: 16 }}>
         <LetterSlot e={e} />
         {portal.length > 0 && (
