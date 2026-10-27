@@ -8,6 +8,7 @@
 //   POST { action: "create", engagement_id, category_id, name }   creates (or reuses) the client folder + subfolders, then syncs
 //   POST { action: "sync", engagement_id }                        Solonos -> OneDrive for new Solonos files, OneDrive -> Solonos for new OneDrive files
 //   POST { action: "roots" | "browse" | "search" | "upload" | "mkdir" }  the OneDrive page in Solonos (partner only)
+//   POST { action: "open", engagement_id, drive, item }          a direct download link for one file in the project folder (staff)
 //   POST { action: "sync_all" } with header x-push-secret         every 15 minutes from Supabase Cron: syncs every linked engagement
 //   POST { action: "dataroom", engagement_id }                  makes an empty "Data Room" folder inside the project folder
 //   POST { action: "share_dataroom", engagement_id, email, message }  Microsoft invites that email to the Data Room folder (can edit)
@@ -21,7 +22,7 @@
 //     (staff: anywhere inside the project folder; the client: only inside 4. Uploads or 5. Virtual Data Room)
 //   POST { action: "client_uploaded", engagement_id, name, folder }  logs the upload so staff see it (bell, digest)
 // Version 1.10 (27 Oct 2026): fix: the client could not open a file lying directly in 3/4/5 (the folder check compared paths that Graph had not returned); now walks up by parent id.
-//   Also: client_open reads the full item for the download link, with /content as fallback.
+//   Also: client_open reads the full item for the download link, with /content as fallback; new staff action "open" (same, inside the project folder).
 // Version 1.9 (27 Oct 2026): uploads only into 4. Uploads (client page and client access); the Virtual Data Room is view and download for everyone.
 // Version 1.8 (27 Oct 2026): the client works from their Solonos page; files go to and from OneDrive without a Microsoft account.
 // Version 1.7 (23 Oct 2026): Microsoft lets an app share only with existing guests, so Solonos first adds the person as a
@@ -195,7 +196,7 @@ Deno.serve(async (req) => {
       return json({ ok: true, ...(await uploadSession(en.onedrive_drive_id, body.item, body.name)) });
     }
     // ---- the OneDrive tab on a project: any staff, but only inside that project's own folder
-    if (["browse", "upload", "mkdir"].includes(body.action) && body.engagement_id) {
+    if (["browse", "upload", "mkdir", "open"].includes(body.action) && body.engagement_id) {
       const { data: en } = await db.from("engagements").select("onedrive_drive_id, onedrive_folder_id").eq("id", body.engagement_id).single();
       if (!en?.onedrive_folder_id) throw new Error("This project has no OneDrive folder yet");
       if (body.drive !== en.onedrive_drive_id) return json({ error: "Outside this project's folder" }, 403);
@@ -205,6 +206,16 @@ Deno.serve(async (req) => {
         const it: any = await g(`/drives/${en.onedrive_drive_id}/items/${body.item}?$select=parentReference`);
         const p = decodeURIComponent(it.parentReference?.path ?? "");
         if (!(p === rootPath || p.startsWith(rootPath + "/"))) return json({ error: "Outside this project's folder" }, 403);
+      }
+      if (body.action === "open") {                                   // a direct download link for one file (staff)
+        const it: any = await g(`/drives/${en.onedrive_drive_id}/items/${body.item}`);
+        let url: string | undefined = it["@microsoft.graph.downloadUrl"];
+        if (!url) {
+          const r = await fetch(`${G}/drives/${en.onedrive_drive_id}/items/${body.item}/content`, { headers: { Authorization: `Bearer ${await graphToken()}` }, redirect: "manual" });
+          url = r.headers.get("location") ?? undefined;
+        }
+        if (!url) return json({ error: "Microsoft gave no download link for this file" }, 502);
+        return json({ ok: true, url, name: it.name });
       }
       return json({ ok: true, ...(await page(db, body)) });
     }

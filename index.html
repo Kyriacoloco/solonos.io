@@ -238,7 +238,7 @@ button.step:hover { color: var(--brand); }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.32";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.33";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -2380,7 +2380,8 @@ function ProjectOneDrive({ e, reload }) {
   const go = (t) => run(async () => { const r = await callFn("onedrive", { action: "browse", engagement_id: e.id, drive: t[t.length - 1].drive, item: t[t.length - 1].id }); setTrail(t); setItems(r.items); });
   useEffect(() => { if (start) go([start]); }, [e.onedrive_folder_id]);  // eslint-disable-line react-hooks/exhaustive-deps
   if (!start) return <OneDriveCard e={e} reload={reload} />;
-  const openItem = (it) => (it.folder ? go([...trail, { drive: it.drive, id: it.id, name: it.name, url: it.url }]) : window.open(it.url, "_blank", "noopener"));
+  const openItem = (it) => { if (it.folder) go([...trail, { drive: it.drive, id: it.id, name: it.name, url: it.url }]); };
+  const download = (it) => run(async () => { const r = await callFn("onedrive", { action: "open", engagement_id: e.id, drive: it.drive, item: it.id }); openFileUrl(r.url); });
   const upload = (files) => run(async () => {
     const list = [...files];
     for (let i = 0; i < list.length; i++) {
@@ -2403,9 +2404,12 @@ function ProjectOneDrive({ e, reload }) {
         {items === null ? <span className="muted small">{busy ? "Opening the folder…" : "Could not open the folder."}</span> : items.length === 0 ? <Empty title="Empty folder">Drop files here to upload them.</Empty> : (
           <div className="stack" style={{ gap: 4, opacity: busy ? .6 : 1 }}>
             {items.map((it) => (
-              <div key={it.id} className="leadrow" onClick={() => openItem(it)} title={it.folder ? "Open folder" : "Open in OneDrive"}>
-                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileIcon(it)} <span style={{ fontWeight: it.folder ? 600 : 500 }}>{it.name}</span></span>
-                <span className="muted small" style={{ flex: "none" }}>{it.folder ? `${it.count ?? ""} item${it.count === 1 ? "" : "s"}` : fileSize(it.size)}{it.modified ? ` · ${day(it.modified)}` : ""}</span>
+              <div key={it.id} className="leadrow" onClick={() => openItem(it)} title={it.folder ? "Open folder" : undefined} style={it.folder ? undefined : { cursor: "default" }}>
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileIcon(it)} {it.folder ? <span style={{ fontWeight: 600 }}>{it.name}</span> : <a href={it.url} target="_blank" rel="noreferrer" title="Open in OneDrive" style={{ fontWeight: 500 }}>{it.name}</a>}</span>
+                <span className="row small" style={{ flex: "none", gap: 8 }}>
+                  <span className="muted">{it.folder ? `${it.count ?? ""} item${it.count === 1 ? "" : "s"}` : fileSize(it.size)}{it.modified ? ` · ${day(it.modified)}` : ""}</span>
+                  {!it.folder && <button className="btn" disabled={busy} onClick={(x) => { x.stopPropagation(); download(it); }}>Download</button>}
+                </span>
               </div>
             ))}
           </div>
@@ -2811,6 +2815,13 @@ function NextStep({ e, st, deposit, docs, invoices, agreements, reload }) {
       {st?.next && <p className="muted small" style={{ margin: "12px 0 0" }}>Unlocks when: {st.gate}.</p>}
     </Card>
   );
+}
+
+/** Opens a direct file link in a new tab; if the browser blocks the popup, the file downloads in this tab instead. */
+function openFileUrl(url) {
+  if (!url) throw new Error("No link for this file");
+  const w = window.open(url, "_blank", "noopener");
+  if (!w) window.location.assign(url);
 }
 
 /** Uploads one file straight into OneDrive (any size): Solonos gives a one-time Microsoft link, the browser sends the file in 10 MB pieces. */
@@ -3795,7 +3806,7 @@ function ClientDocuments({ e, preview }) {
   }, [e.id, preview]);
   useEffect(() => { setTrail([]); setItems(null); load(tab, []).catch(() => setItems([])); }, [tab, load]);
   const go = (tr) => run(async () => { setTrail(tr); await load(tab, tr); });
-  const openItem = (it) => (it.folder ? go([...trail, { id: it.id, name: it.name }]) : run(async () => { const r = await callFn("onedrive", { action: "client_open", engagement_id: e.id, item: it.id }); window.open(r.url, "_blank", "noopener"); }));
+  const openItem = (it) => (it.folder ? go([...trail, { id: it.id, name: it.name }]) : run(async () => { const r = await callFn("onedrive", { action: "client_open", engagement_id: e.id, item: it.id }); openFileUrl(r.url); }));
   const upload = (files) => run(async () => {
     const list = [...files];
     const rootId = here?.id ?? (await callFn("onedrive", { action: "client_list", engagement_id: e.id, folder: tab })).root;
