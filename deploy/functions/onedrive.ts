@@ -20,6 +20,7 @@
 //   POST { action: "upload_session", engagement_id, item, name, size }   a Microsoft upload link; the browser sends the file straight to OneDrive
 //     (staff: anywhere inside the project folder; the client: only inside 4. Uploads or 5. Virtual Data Room)
 //   POST { action: "client_uploaded", engagement_id, name, folder }  logs the upload so staff see it (bell, digest)
+// Version 1.10 (27 Oct 2026): fix: the client could not open a file lying directly in 3/4/5 (the folder check compared paths that Graph had not returned); now walks up by parent id.
 // Version 1.9 (27 Oct 2026): uploads only into 4. Uploads (client page and client access); the Virtual Data Room is view and download for everyone.
 // Version 1.8 (27 Oct 2026): the client works from their Solonos page; files go to and from OneDrive without a Microsoft account.
 // Version 1.7 (23 Oct 2026): Microsoft lets an app share only with existing guests, so Solonos first adds the person as a
@@ -140,14 +141,13 @@ Deno.serve(async (req) => {
       const roots = new Map<string, any>();
       for (const c of await children(e.onedrive_drive_id, e.onedrive_folder_id)) if (c.folder) roots.set(c.name, c);
       const allowed: Record<string, any> = { deliverables: roots.get(SUB.deliv), uploads: roots.get(SUB.uploads), vdr: roots.get(SUB.vdr) };
-      const inside = async (itemId: string, keys: string[]) => {     // is this item one of (or inside one of) the allowed root folders?
-        for (const k of keys) if (allowed[k]?.id === itemId) return k;
-        const it: any = await g(`/drives/${e.onedrive_drive_id}/items/${itemId}?$select=id,parentReference`);
-        const p = decodeURIComponent(it.parentReference?.path ?? "");
-        for (const k of keys) {
-          const r = allowed[k]; if (!r) continue;
-          const rp = decodeURIComponent(`${r.parentReference?.path ?? ""}/${r.name}`);
-          if (p === rp || p.startsWith(rp + "/")) return k;
+      const inside = async (itemId: string, keys: string[]) => {     // is this item one of (or inside one of) the allowed root folders? (walks up by parent id)
+        let cur = itemId;
+        for (let hop = 0; hop < 12 && cur; hop++) {
+          for (const k of keys) if (allowed[k]?.id === cur) return k;
+          if (cur === e.onedrive_folder_id) return null;
+          const it: any = await g(`/drives/${e.onedrive_drive_id}/items/${cur}?$select=id,parentReference`);
+          cur = it.parentReference?.id ?? "";
         }
         return null;
       };
