@@ -20,6 +20,7 @@
 //   POST { action: "upload_session", engagement_id, item, name, size }   a Microsoft upload link; the browser sends the file straight to OneDrive
 //     (staff: anywhere inside the project folder; the client: only inside 4. Uploads or 5. Virtual Data Room)
 //   POST { action: "client_uploaded", engagement_id, name, folder }  logs the upload so staff see it (bell, digest)
+// Version 1.9 (27 Oct 2026): uploads only into 4. Uploads (client page and client access); the Virtual Data Room is view and download for everyone.
 // Version 1.8 (27 Oct 2026): the client works from their Solonos page; files go to and from OneDrive without a Microsoft account.
 // Version 1.7 (23 Oct 2026): Microsoft lets an app share only with existing guests, so Solonos first adds the person as a
 //   guest of the Consortia tenant (Graph /invitations, no Microsoft email; needs the User.Invite.All application permission).
@@ -157,7 +158,7 @@ Deno.serve(async (req) => {
         if (item !== root.id && !(await inside(item, [body.folder]))) return json({ error: "not your folder" }, 403);
         const items = (await children(e.onedrive_drive_id, item)).map((c) => pick(c, e.onedrive_drive_id))
           .sort((x, y) => (Number(y.folder) - Number(x.folder)) || x.name.localeCompare(y.name, "en", { numeric: true }));
-        return json({ ok: true, items, root: root.id, canUpload: body.folder !== "deliverables" });
+        return json({ ok: true, items, root: root.id, canUpload: body.folder === "uploads" });
       }
       if (body.action === "client_open") {
         if (!(await inside(body.item, ["deliverables", "uploads", "vdr"]))) return json({ error: "not your file" }, 403);
@@ -170,8 +171,8 @@ Deno.serve(async (req) => {
         await db.from("engagements").update({ last_client_activity_at: new Date().toISOString() }).eq("id", e.id);
         return json({ ok: true });
       }
-      // upload_session for the client: only into 4. Uploads or 5. Virtual Data Room
-      if (!(await inside(body.item, ["uploads", "vdr"]))) return json({ error: "you can upload only into Uploads or the Virtual Data Room" }, 403);
+      // upload_session for the client: only into 4. Uploads
+      if (!(await inside(body.item, ["uploads"]))) return json({ error: "you can upload only into Uploads" }, 403);
       return json({ ok: true, ...(await uploadSession(e.onedrive_drive_id, body.item, body.name)) });
     }
     if (body.action === "upload_session") {   // staff: anywhere inside the project folder
@@ -255,11 +256,12 @@ Deno.serve(async (req) => {
       const targets: { item: string; name: string; url: string; role: "read" | "write" }[] = [];
       let label = "";
       if (body.scope === "client") {
-        for (const [n, role] of [[SUB.deliv, "read"], [SUB.uploads, "write"], [SUB.vdr, "write"]] as const) {
+        const up = body.role === "write";
+        for (const [n, role] of [[SUB.deliv, "read"], [SUB.uploads, up ? "write" : "read"], [SUB.vdr, "read"]] as const) {
           const f: any = await ensureFolder(e.onedrive_drive_id, e.onedrive_folder_id, n);
           targets.push({ item: f.id, name: n, url: f.webUrl, role });
         }
-        label = "Client: Deliverables (view), Uploads and Virtual Data Room (edit)";
+        label = up ? "Client folders: Deliverables and Virtual Data Room (view), Uploads (view and upload)" : "Client folders: Deliverables, Uploads and Virtual Data Room (view and download)";
       } else {
         if (!e.dataroom_folder_id) throw new Error("This project has no Virtual Data Room folder yet");
         const it: any = await g(`/drives/${e.onedrive_drive_id}/items/${body.folder_id}?$select=id,name,webUrl,parentReference`);
@@ -268,9 +270,9 @@ Deno.serve(async (req) => {
           const roomPath = decodeURIComponent(`${room.parentReference?.path ?? ""}/${room.name}`);
           if (!decodeURIComponent(it.parentReference?.path ?? "").startsWith(roomPath)) throw new Error("Pick a folder inside 5. Virtual Data Room");
         }
-        const role = body.role === "write" ? "write" : "read";
+        const role = "read";        // the data room is view and download only, for everyone
         targets.push({ item: it.id, name: it.id === e.dataroom_folder_id ? SUB.vdr : it.name, url: it.webUrl, role });
-        label = `${it.id === e.dataroom_folder_id ? "Whole data room" : it.name} (${role === "write" ? "view and upload" : "view only"})`;
+        label = `${it.id === e.dataroom_folder_id ? "Whole data room" : it.name} (view and download)`;
       }
       // make them a guest first (an app may only share with existing guests); harmless if they already are one
       try {
