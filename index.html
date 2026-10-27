@@ -238,7 +238,7 @@ button.step:hover { color: var(--brand); }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.28";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.29";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -2308,65 +2308,55 @@ function AccessCard({ e, reload }) {
   if (!e.onedrive_folder_id) return null;
   const list = Array.isArray(e.dataroom_shared) ? e.dataroom_shared : [];
   const live = list.filter((a) => !a.revoked_at), gone = list.filter((a) => a.revoked_at);
-  const client = live.find((a) => a.scope === "client");
-  const buyers = live.filter((a) => a.scope !== "client");
+  const first = String(e.client_name || "").trim().split(/\s+/)[0];
   if (!e.dataroom_folder_id) return (
     <Card title="Access">
       <p className="small" style={{ margin: "0 0 10px" }}>This project folder was made before the new layout. Add the five folders (1. Engagement Letter &amp; NDA, 2. Workings, 3. Deliverables, 4. Uploads, 5. Virtual Data Room) to give access.</p>
       <button className="btn primary" disabled={busy} onClick={() => run(async () => { await callFn("onedrive", { action: "dataroom", engagement_id: e.id }); await reload(); }, "Folders added")}>Add the five folders</button>
     </Card>
   );
-  const openBuyer = () => run(async () => {
+  const open = () => run(async () => {
     const r = await callFn("onedrive", { action: "vdr_folders", engagement_id: e.id });
     setFolders(r.folders ?? []);
-    setForm({ scope: "folder", email: "", folder_id: (r.folders ?? [])[1]?.id ?? (r.folders ?? [])[0]?.id ?? "", role: "read", expires_at: plusDays(90), message: `Dear,\n\nYou now have access to the data room for ${e.company_name || "this project"}.\n\nKind regards,\nKyriacos` });
+    setForm({ scope: "client", email: live.some((a) => a.email === (e.client_email || "").toLowerCase()) ? "" : (e.client_email || ""), folder_id: (r.folders ?? [])[0]?.id ?? "", role: "write", expires_at: plusDays(365),
+      message: `Dear ${first},\n\nYou now have access to the project folders for ${e.company_name || "your project"}.\n\nKind regards,\nKyriacos` });
   });
   const grant = () => run(async () => {
-    await callFn("onedrive", { action: "grant", engagement_id: e.id, scope: form.scope, email: form.email, folder_id: form.folder_id, role: form.role, expires_at: form.scope === "client" ? null : form.expires_at || null, message: form.message });
+    await callFn("onedrive", { action: "grant", engagement_id: e.id, scope: form.scope, email: form.email, folder_id: form.folder_id, role: form.scope === "client" ? form.role : "read", expires_at: form.expires_at || null, message: form.message });
     setForm(null); await reload();
   }, `Access given and emailed to ${form?.email}`);
   const remove = (a) => run(async () => { await callFn("onedrive", { action: "revoke", engagement_id: e.id, access_id: a.id }); await reload(); }, `Access removed for ${a.email}`);
-  const row = (a) => (
-    <div key={a.id} className="row between small" style={{ gap: 8 }}>
-      <span style={{ minWidth: 0 }}><strong>{a.email}</strong> <span className="muted">· {a.label}{a.expires_at ? ` · until ${day(a.expires_at)}` : ""}</span></span>
-      <button className="btn" disabled={busy} onClick={() => remove(a)}>Remove</button>
-    </div>
-  );
   return (
-    <Card title="Access" right={<a className="btn" href={e.dataroom_url} target="_blank" rel="noreferrer">Open Virtual Data Room</a>}>
-      <div className="stack" style={{ gap: 14 }}>
-        <div>
-          <h3 style={{ margin: "0 0 6px" }}>Client</h3>
-          <div className="small">The client works from their Solonos page: they see 3. Deliverables, and upload into 4. Uploads and 5. Virtual Data Room. Never 1. Engagement Letter &amp; NDA or 2. Workings. Invite them from the Overview tab.</div>
-          {client && <div style={{ marginTop: 6 }}>{row(client)}<div className="muted small">Also has the folders in OneDrive itself (older setup).</div></div>}
-        </div>
-        <div>
-          <h3 style={{ margin: "0 0 6px" }}>Buyers</h3>
-          <div className="stack" style={{ gap: 6 }}>
-            {buyers.length === 0 && <span className="muted small">Nobody yet. Make a folder per buyer (or per stage) inside 5. Virtual Data Room, then give each buyer their folder.</span>}
-            {buyers.map(row)}
-            {!form && <div><button className="btn" disabled={busy} onClick={openBuyer}>Give a buyer access</button></div>}
+    <Card title="Access to the OneDrive folders" right={<a className="btn" href={e.dataroom_url} target="_blank" rel="noreferrer">Open Virtual Data Room</a>}>
+      <div className="stack" style={{ gap: 10 }}>
+        <p className="small" style={{ margin: 0 }}>The client's own Solonos page already shows 3. Deliverables, 4. Uploads and 5. Virtual Data Room. Use this to open the folders in OneDrive itself, for the client, their accountant, or a buyer. Nobody outside Consortia ever sees 1. Engagement Letter &amp; NDA or 2. Workings.</p>
+        {live.length === 0 && <span className="muted small">Nobody has OneDrive access yet.</span>}
+        {live.map((a) => (
+          <div key={a.id} className="row between small" style={{ gap: 8 }}>
+            <span style={{ minWidth: 0 }}><strong>{a.email}</strong> <span className="muted">· {a.label}{a.expires_at ? ` · until ${day(a.expires_at)}` : ""}</span></span>
+            <button className="btn" disabled={busy} onClick={() => remove(a)}>Remove</button>
           </div>
-        </div>
+        ))}
+        {!form && <div><button className="btn primary" disabled={busy} onClick={open}>Give access</button></div>}
         {form && (
           <div className="card" style={{ padding: 12, background: "var(--sunken)" }}>
             <div className="stack" style={{ gap: 10 }}>
-              <h3 style={{ margin: 0 }}>{form.scope === "client" ? "Give the client access" : "Give a buyer access"}</h3>
               <Field label="Email"><input type="email" value={form.email} onChange={(x) => setForm({ ...form, email: x.target.value })} placeholder="name@company.com" /></Field>
-              {form.scope !== "client" && <>
-                <Field label="Folder">
-                  <select value={form.folder_id} onChange={(x) => setForm({ ...form, folder_id: x.target.value })}>
-                    {(folders ?? []).map((f) => <option key={f.id} value={f.id}>{f.depth ? "  ".repeat(f.depth) : ""}{f.name}</option>)}
-                  </select>
-                </Field>
-                {(folders ?? []).length <= 1 && <span className="muted small">No folders inside the data room yet. Make them in OneDrive (Open in OneDrive, then 5. Virtual Data Room, then New folder), then come back.</span>}
-                <div className="grid2">
-                  <Field label="Can"><select value={form.role} onChange={(x) => setForm({ ...form, role: x.target.value })}><option value="read">View and download only</option><option value="write">View and upload</option></select></Field>
-                  <Field label="Access ends on"><input type="date" value={form.expires_at} onChange={(x) => setForm({ ...form, expires_at: x.target.value })} /></Field>
-                </div>
-              </>}
+              <Field label="What they get">
+                <select value={form.scope === "client" ? "client" : form.folder_id} onChange={(x) => setForm(x.target.value === "client" ? { ...form, scope: "client", expires_at: plusDays(365) } : { ...form, scope: "folder", folder_id: x.target.value, expires_at: plusDays(90) })}>
+                  <option value="client">Client folders: 3. Deliverables, 4. Uploads, 5. Virtual Data Room</option>
+                  {(folders ?? []).map((f) => <option key={f.id} value={f.id}>{f.depth ? "  ".repeat(f.depth) : ""}{f.depth ? f.name : "5. Virtual Data Room only (whole room)"}</option>)}
+                </select>
+              </Field>
+              <div className="grid2">
+                {form.scope === "client"
+                  ? <Field label="Can"><select value={form.role} onChange={(x) => setForm({ ...form, role: x.target.value })}><option value="write">View and download, and upload into 4. Uploads</option><option value="read">View and download only</option></select></Field>
+                  : <Field label="Can"><input value="View and download only" disabled /></Field>}
+                <Field label="Access ends on"><input type="date" value={form.expires_at} onChange={(x) => setForm({ ...form, expires_at: x.target.value })} /></Field>
+              </div>
+              {form.scope !== "client" && (folders ?? []).length <= 1 && <span className="muted small">To give a buyer only part of the data room, make folders inside 5. Virtual Data Room in OneDrive first; they then appear in this list.</span>}
               <Field label="Message (Solonos emails it from info@ with the folder links)"><textarea rows={4} value={form.message} onChange={(x) => setForm({ ...form, message: x.target.value })} /></Field>
-              <p className="muted small" style={{ margin: 0 }}>Solonos emails them the links from info@. The first time, Microsoft sends them a short code to confirm it's them; no Microsoft account needed.{form.scope !== "client" ? " On the end date Solonos removes the access by itself." : ""}</p>
+              <p className="muted small" style={{ margin: 0 }}>The first time, Microsoft sends them a short code to confirm it's them; no Microsoft account needed. On the end date Solonos removes the access by itself. The Virtual Data Room is always view and download only.</p>
               <div className="row"><button className="btn primary" disabled={busy || !form.email.trim() || (form.scope !== "client" && !form.folder_id)} onClick={grant}>Give access</button><button className="btn" onClick={() => setForm(null)}>Cancel</button></div>
             </div>
           </div>
@@ -3790,6 +3780,7 @@ function ClientDocuments({ e, preview }) {
   const [run, busy] = useAction();
   const sellSide = e.engagement_type === "sell_side";
   const TABS = [["uploads", "Your uploads"], ["deliverables", "From Consortia"], ...(sellSide ? [["vdr", "Virtual Data Room"]] : [])];
+  const HINT = { uploads: "Everything you send us goes here. Drop files below, as many and as big as you like, or use Upload next to an item in the list above.", deliverables: "Our reports and documents for you. View and download.", vdr: "The documents buyers will see. View and download." };
   const [tab, setTab] = useState("uploads");
   const [trail, setTrail] = useState([]);     // folders inside the tab root: [{id,name}]
   const [items, setItems] = useState(null);
@@ -3799,7 +3790,7 @@ function ClientDocuments({ e, preview }) {
   const here = trail[trail.length - 1];
   const load = useCallback(async (t, tr) => {
     const r = await callFn("onedrive", { action: "client_list", engagement_id: e.id, folder: t, item: tr[tr.length - 1]?.id });
-    setNone(!!r.none); setItems(r.items ?? []); setCanUpload(!!r.canUpload && !preview);
+    setNone(!!r.none); setItems(r.items ?? []); setCanUpload(!!r.canUpload);
   }, [e.id, preview]);
   useEffect(() => { setTrail([]); setItems(null); load(tab, []).catch(() => setItems([])); }, [tab, load]);
   const go = (tr) => run(async () => { setTrail(tr); await load(tab, tr); });
@@ -3820,6 +3811,7 @@ function ClientDocuments({ e, preview }) {
       <div className="tabs" style={{ margin: "0 0 12px" }}>{TABS.map(([k, l]) => <button key={k} className={`tab${tab === k ? " on" : ""}`} onClick={() => setTab(k)}>{l}</button>)}</div>
       {none ? <span className="muted small">Your folders are being set up. Please check back shortly.</span> : (
         <>
+          <p className="small" style={{ margin: "0 0 10px" }}>{HINT[tab]}</p>
           {trail.length > 0 && <div className="row wrap" style={{ gap: 6, marginBottom: 8 }}><button className="btn" onClick={() => go([])}>{TABS.find(([k]) => k === tab)?.[1]}</button>{trail.map((t, i) => <React.Fragment key={t.id}><span className="muted">›</span><button className="btn" onClick={() => go(trail.slice(0, i + 1))}>{t.name}</button></React.Fragment>)}</div>}
           {items === null ? <span className="muted small">Loading…</span> : items.length === 0 ? <span className="muted small">{tab === "deliverables" ? "Nothing here yet. Our reports for you will appear here." : "Nothing here yet."}</span> : (
             <div className="stack" style={{ gap: 4, opacity: busy ? .6 : 1 }}>
@@ -3834,10 +3826,9 @@ function ClientDocuments({ e, preview }) {
           {canUpload && (
             <div style={{ marginTop: 12 }}>
               {prog && <div className="small" style={{ marginBottom: 8 }}>Uploading {prog.name}{prog.of > 1 ? ` (${prog.n} of ${prog.of})` : ""} · {Math.round(prog.pct * 100)}%<div style={{ height: 6, background: "var(--border-sub)", borderRadius: 3, marginTop: 4 }}><div style={{ width: `${Math.round(prog.pct * 100)}%`, height: 6, background: "var(--accent)", borderRadius: 3 }} /></div></div>}
-              <DropZone busy={busy} onFiles={(fs) => upload([...fs])} label={`Drop files here${here ? ` (into ${here.name})` : ""}, or click to choose. Any size, as many as you need.`} />
+              <DropZone busy={busy || preview} onFiles={(fs) => !preview && upload([...fs])} label={preview ? "Upload box (switched off in the staff preview)" : `Drop files here${here ? ` (into ${here.name})` : ""}, or click to choose. Any size, as many as you need.`} />
             </div>
           )}
-          {preview && tab !== "deliverables" && <span className="muted small">Uploading is disabled in the staff preview.</span>}
         </>
       )}
     </Card>
