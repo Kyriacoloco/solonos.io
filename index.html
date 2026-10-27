@@ -238,7 +238,7 @@ button.step:hover { color: var(--brand); }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.25";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.26";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -2454,7 +2454,16 @@ function DocSlot({ e, kind, title, docName, what, extra }) {
   const write = (d) => { const first = String(e.client_name || "").trim().split(/\s+/)[0]; setMail({ d, to: e.client_email || "", subject: d.name, text: `Dear ${first},\n\nPlease find attached ${what}. Please sign it and send it back by replying to this email.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory` }); };
   const send = (m) => run(async () => { await callFn("engagement-send", { kind: "project_email", engagement_id: e.id, to: m.to, subject: m.subject, text: m.text, files: [mail.d.storage_path] }); setMail(null); }, "Emailed");
   const signed = docs.some((d) => d.meta?.signed);
-  const pick = (label, isSigned) => <label className="btn" style={{ cursor: "pointer" }}>{label}<input type="file" accept=".pdf,.doc,.docx" style={{ display: "none" }} onChange={(x) => { up(x.target.files?.[0], isSigned); x.target.value = ""; }} /></label>;
+  const remove = (d) => { if (!window.confirm(`Remove "${d.name}" from Solonos? (The copy in OneDrive, if any, stays.)`)) return; run(async () => {
+    const { error } = await supabase.from("documents").delete().eq("id", d.id);
+    if (error) throw new Error(error.message);
+    const [bucket, ...rest] = String(d.storage_path).split("/");
+    await supabase.storage.from(bucket).remove([rest.join("/")]);
+    await load();
+  }, "Removed"); };
+  const inpRef = useRef(null);
+  const [pickSigned, setPickSigned] = useState(false);
+  const pick = (label, isSigned) => <button type="button" className="btn" disabled={busy} onClick={() => { setPickSigned(isSigned); inpRef.current?.click(); }}>{busy ? "Uploading…" : label}</button>;
   return (
     <Card title={title} right={signed ? <Chip kind="ok">Signed</Chip> : null}>
       <div className="stack" style={{ gap: 6 }}>
@@ -2462,10 +2471,12 @@ function DocSlot({ e, kind, title, docName, what, extra }) {
         {docs.map((d) => (
           <div key={d.id} className="row between small">
             <span>{d.name}{d.meta?.signed ? <span style={{ color: "var(--ok)" }}> ✓</span> : null}<div className="muted">{ago(d.created_at)}</div></span>
-            <span className="row">{!d.meta?.signed && <button className="btn" disabled={busy} onClick={() => write(d)}>Email…</button>}<button className="btn" onClick={() => open(d)}>Open</button></span>
+            <span className="row">{!d.meta?.signed && <button className="btn" disabled={busy} onClick={() => write(d)}>Email…</button>}<button className="btn" onClick={() => open(d)}>Open</button><button className="btn" disabled={busy} onClick={() => remove(d)} title="Remove">✕</button></span>
           </div>
         ))}
+        <input ref={inpRef} type="file" accept=".pdf,.doc,.docx" style={{ display: "none" }} onChange={(x) => { up(x.target.files?.[0], pickSigned); x.target.value = ""; }} />
         {!signed && <div className="row wrap" style={{ marginTop: 6 }}>{pick(docs.length ? "Upload a new version" : `Upload ${title === "NDA" ? "NDA" : title.toLowerCase()}`, false)}{pick("Upload signed copy", true)}{extra}</div>}
+        {signed && <span className="muted small">Signed. To replace it, remove the signed copy first.</span>}
       </div>
       {mail && <EmailDialog title={`Email the ${title === "NDA" ? "NDA" : title.toLowerCase()}`} to={mail.to} subject={mail.subject} text={mail.text} attached={`${mail.d.name}`} busy={busy} onSend={send} onCancel={() => setMail(null)} />}
     </Card>
