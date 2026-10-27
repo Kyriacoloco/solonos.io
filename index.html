@@ -238,7 +238,7 @@ button.step:hover { color: var(--brand); }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.23";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.24";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -2173,7 +2173,7 @@ function ValuationProject({ e, deposit, invoices, docs, agreements, feed, contac
       {tab === "overview" && (
         <div className="grid2">
           <div className="stack" style={{ gap: 16 }}>
-            <NextStep e={e} st={st} deposit={deposit} docs={docs} invoices={invoices} agreements={agreements} reload={reload} />
+            <ClientPageCard e={e} reload={reload} />
             <ProjectTasks e={e} />
             <QuickNotes e={e} />
           </div>
@@ -2471,6 +2471,24 @@ function LetterSlot({ e }) {
   );
 }
 
+/** Invite the client to their Solonos page (progress, folders, documents to sign, invoices), with your own email. */
+function ClientPageCard({ e, reload }) {
+  const [run, busy] = useAction();
+  const [mail, setMail] = useState(null);
+  const first = String(e.client_name || "").trim().split(/\s+/)[0];
+  const write = () => setMail({ to: e.client_email || "", subject: `Your Solonos page - ${e.company_name || e.client_name}`,
+    text: `Dear ${first},\n\nWe have set up a private page for ${e.company_name || "your project"}. On it you can follow where the ${typeLabel(e.engagement_type).toLowerCase()} stands, open your document folders, sign documents and see your invoices.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory` });
+  const send = (m) => run(async () => { await callFn("engagement-send", { kind: "invite", engagement_id: e.id, email: m.to, email_subject: m.subject, email_text: m.text }); setMail(null); await reload(); }, "Invitation emailed");
+  return (
+    <Card title="Client page" right={<a className="btn" href={`${PORTAL_URL}?as=${e.id}`} target="_blank" rel="noreferrer">Preview</a>}>
+      <p className="small" style={{ margin: "0 0 10px" }}>{e.sent_at ? `Invited ${ago(e.sent_at)}${e.last_client_activity_at ? `, last visit ${ago(e.last_client_activity_at)}` : ", not visited yet"}.` : "Not invited yet."} They see the process line above, their folders, anything to sign, and invoices.</p>
+      <button className="btn primary" disabled={busy || !e.client_email} onClick={write}>{e.sent_at ? "Send the invitation again" : "Invite to client page"}</button>
+      {!e.client_email && <span className="muted small" style={{ marginLeft: 8 }}>Add their email in Client details first.</span>}
+      {mail && <EmailDialog title="Invite to the client page" to={mail.to} subject={mail.subject} text={mail.text} attached={null} busy={busy} onSend={send} onCancel={() => setMail(null)} />}
+    </Card>
+  );
+}
+
 /** Engagement tab, same for every project: the NDA and the engagement letter. */
 function EngagementTab({ e, agreements = [] }) {
   const portal = agreements.filter((a) => a.status !== "void");
@@ -2544,7 +2562,7 @@ function SimpleEngagement({ e, invoices, feed, contact, reload }) {
       <ProjectTabs tab={tab} setTab={setTab} e={e} />
       {tab === "overview" && (
         <div className="grid2">
-          <div className="stack" style={{ gap: 16 }}><ProjectTasks e={e} /><QuickNotes e={e} /></div>
+          <div className="stack" style={{ gap: 16 }}><ClientPageCard e={e} reload={reload} /><ProjectTasks e={e} /><QuickNotes e={e} /></div>
           <div className="stack" style={{ gap: 16 }}><ClientDetails e={e} reload={reload} /><ActivityCard e={e} feed={feed} /></div>
         </div>
       )}
