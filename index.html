@@ -238,7 +238,7 @@ button.step:hover { color: var(--brand); }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.26";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.27";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -2309,7 +2309,6 @@ function AccessCard({ e, reload }) {
   const live = list.filter((a) => !a.revoked_at), gone = list.filter((a) => a.revoked_at);
   const client = live.find((a) => a.scope === "client");
   const buyers = live.filter((a) => a.scope !== "client");
-  const first = String(e.client_name || "").trim().split(/\s+/)[0];
   if (!e.dataroom_folder_id) return (
     <Card title="Access">
       <p className="small" style={{ margin: "0 0 10px" }}>This project folder was made before the new layout. Add the five folders (1. Engagement Letter &amp; NDA, 2. Workings, 3. Deliverables, 4. Uploads, 5. Virtual Data Room) to give access.</p>
@@ -2321,7 +2320,6 @@ function AccessCard({ e, reload }) {
     setFolders(r.folders ?? []);
     setForm({ scope: "folder", email: "", folder_id: (r.folders ?? [])[1]?.id ?? (r.folders ?? [])[0]?.id ?? "", role: "read", expires_at: plusDays(90), message: `Dear,\n\nYou now have access to the data room for ${e.company_name || "this project"}.\n\nKind regards,\nKyriacos` });
   });
-  const openClient = () => setForm({ scope: "client", email: e.client_email || "", message: `Dear ${first}, you now have access to your project folders: Deliverables (our reports for you), Uploads (put your documents here) and the Virtual Data Room. Kind regards, Kyriacos` });
   const grant = () => run(async () => {
     await callFn("onedrive", { action: "grant", engagement_id: e.id, scope: form.scope, email: form.email, folder_id: form.folder_id, role: form.role, expires_at: form.scope === "client" ? null : form.expires_at || null, message: form.message });
     setForm(null); await reload();
@@ -2338,8 +2336,8 @@ function AccessCard({ e, reload }) {
       <div className="stack" style={{ gap: 14 }}>
         <div>
           <h3 style={{ margin: "0 0 6px" }}>Client</h3>
-          {client ? row(client) : !form && <button className="btn primary" onClick={openClient}>Give client access</button>}
-          <div className="muted small" style={{ marginTop: 4 }}>Sees 3. Deliverables (view), 4. Uploads and 5. Virtual Data Room (view and upload). Never 1. Engagement Letter &amp; NDA or 2. Workings.</div>
+          <div className="small">The client works from their Solonos page: they see 3. Deliverables, and upload into 4. Uploads and 5. Virtual Data Room. Never 1. Engagement Letter &amp; NDA or 2. Workings. Invite them from the Overview tab.</div>
+          {client && <div style={{ marginTop: 6 }}>{row(client)}<div className="muted small">Also has the folders in OneDrive itself (older setup).</div></div>}
         </div>
         <div>
           <h3 style={{ margin: "0 0 6px" }}>Buyers</h3>
@@ -2386,19 +2384,22 @@ function ProjectOneDrive({ e, reload }) {
   const start = e.onedrive_folder_id ? { drive: e.onedrive_drive_id, id: e.onedrive_folder_id, name: String(e.onedrive_path || "").split(" / ").pop() || "Project folder", url: e.onedrive_url } : null;
   const [trail, setTrail] = useState(start ? [start] : []);
   const [items, setItems] = useState(null);
+  const [prog, setProg] = useState(null);   // { name, pct, n, of }
   const here = trail[trail.length - 1];
   const go = (t) => run(async () => { const r = await callFn("onedrive", { action: "browse", engagement_id: e.id, drive: t[t.length - 1].drive, item: t[t.length - 1].id }); setTrail(t); setItems(r.items); });
   useEffect(() => { if (start) go([start]); }, [e.onedrive_folder_id]);  // eslint-disable-line react-hooks/exhaustive-deps
   if (!start) return <OneDriveCard e={e} reload={reload} />;
   const openItem = (it) => (it.folder ? go([...trail, { drive: it.drive, id: it.id, name: it.name, url: it.url }]) : window.open(it.url, "_blank", "noopener"));
   const upload = (files) => run(async () => {
-    for (const f of files) {
-      if (f.size > 25 * 1048576) throw new Error(`${f.name} is over 25 MB: drop it into OneDrive directly`);
-      const b64 = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = () => bad(new Error("could not read the file")); r.readAsDataURL(f); });
-      await callFn("onedrive", { action: "upload", engagement_id: e.id, drive: here.drive, item: here.id, name: f.name, contentBase64: b64 });
+    const list = [...files];
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      setProg({ name: f.name, pct: 0, n: i + 1, of: list.length });
+      await uploadToOneDrive({ engagementId: e.id, item: here.id, file: f, onProgress: (p) => setProg({ name: f.name, pct: p, n: i + 1, of: list.length }) });
     }
+    setProg(null);
     await go(trail);
-  }, files.length === 1 ? "Uploaded to OneDrive" : `${files.length} files uploaded to OneDrive`);
+  }, files.length === 1 ? "Uploaded to OneDrive" : `${files.length} files uploaded to OneDrive`).then(() => setProg(null));
   const sync = () => run(async () => { const r = await callFn("onedrive", { action: "sync", engagement_id: e.id }); toast(`Synced: ${r.uploaded ?? 0} to OneDrive, ${r.downloaded ?? 0} to Solonos`); await go(trail); });
   return (
     <Card title={<span>{e.onedrive_path || "OneDrive"}</span>} right={<span className="row"><button className="btn" disabled={busy} onClick={sync} title="Solonos copies NDAs, letters and invoices here by itself every 15 minutes">Sync now</button><a className="btn" href={here?.url || e.onedrive_url} target="_blank" rel="noreferrer">Open in OneDrive</a></span>}>
@@ -2419,7 +2420,10 @@ function ProjectOneDrive({ e, reload }) {
           </div>
         )}
         {trail.length > 1 ? (
-          <div style={{ marginTop: 12 }}><DropZone busy={busy} onFiles={(fs) => upload([...fs])} label={`Drop files here to upload them into ${here.name}, or click to choose (up to 25 MB each; bigger files: Open in OneDrive)`} /></div>
+          <div style={{ marginTop: 12 }}>
+            {prog && <div className="small" style={{ marginBottom: 8 }}>Uploading {prog.name}{prog.of > 1 ? ` (${prog.n} of ${prog.of})` : ""} · {Math.round(prog.pct * 100)}%<div style={{ height: 6, background: "var(--border-sub)", borderRadius: 3, marginTop: 4 }}><div style={{ width: `${Math.round(prog.pct * 100)}%`, height: 6, background: "var(--accent)", borderRadius: 3 }} /></div></div>}
+            <DropZone busy={busy} onFiles={(fs) => upload([...fs])} label={`Drop files here to upload them into ${here.name}, or click to choose. Any size.`} />
+          </div>
         ) : <p className="muted small" style={{ marginTop: 10 }}>Open a folder (for example 4. Uploads), then drag files onto it. NDAs, letters and invoices made in Solonos land in these folders by themselves.</p>}
       </div>
     </Card>
@@ -2710,6 +2714,22 @@ function NextStep({ e, st, deposit, docs, invoices, agreements, reload }) {
       {st?.next && <p className="muted small" style={{ margin: "12px 0 0" }}>Unlocks when: {st.gate}.</p>}
     </Card>
   );
+}
+
+/** Uploads one file straight into OneDrive (any size): Solonos gives a one-time Microsoft link, the browser sends the file in 10 MB pieces. */
+async function uploadToOneDrive({ engagementId, item, file, onProgress }) {
+  const { uploadUrl } = await callFn("onedrive", { action: "upload_session", engagement_id: engagementId, item, name: file.name, size: file.size });
+  const CHUNK = 10 * 1024 * 1024;      // a multiple of 320 KiB, as Microsoft requires
+  let sent = 0, last = null;
+  while (sent < file.size || file.size === 0) {
+    const end = Math.min(sent + CHUNK, file.size);
+    const r = await fetch(uploadUrl, { method: "PUT", headers: { "Content-Range": `bytes ${sent}-${end - 1}/${file.size}` }, body: file.slice(sent, end) });
+    if (!r.ok && r.status !== 202) throw new Error(`Upload of ${file.name} failed (${r.status})`);
+    sent = end; onProgress?.(sent / Math.max(file.size, 1));
+    if (r.status === 200 || r.status === 201) { last = await r.json().catch(() => null); break; }
+    if (file.size === 0) break;
+  }
+  return last;
 }
 
 async function callFn(name, body) {
@@ -3657,6 +3677,65 @@ function Portal({ session }) {
   return <PortalHome e={e} agreements={agreements} invoices={invoices} reload={load} preview={preview} />;
 }
 
+/** The client's documents: Deliverables (ours, read only), Uploads (theirs), Virtual Data Room (sell-side). All in OneDrive, shown here. */
+function ClientDocuments({ e, preview }) {
+  const [run, busy] = useAction();
+  const sellSide = e.engagement_type === "sell_side";
+  const TABS = [["uploads", "Your uploads"], ["deliverables", "From Consortia"], ...(sellSide ? [["vdr", "Virtual Data Room"]] : [])];
+  const [tab, setTab] = useState("uploads");
+  const [trail, setTrail] = useState([]);     // folders inside the tab root: [{id,name}]
+  const [items, setItems] = useState(null);
+  const [none, setNone] = useState(false);
+  const [canUpload, setCanUpload] = useState(false);
+  const [prog, setProg] = useState(null);
+  const here = trail[trail.length - 1];
+  const load = useCallback(async (t, tr) => {
+    const r = await callFn("onedrive", { action: "client_list", engagement_id: e.id, folder: t, item: tr[tr.length - 1]?.id });
+    setNone(!!r.none); setItems(r.items ?? []); setCanUpload(!!r.canUpload && !preview);
+  }, [e.id, preview]);
+  useEffect(() => { setTrail([]); setItems(null); load(tab, []).catch(() => setItems([])); }, [tab, load]);
+  const go = (tr) => run(async () => { setTrail(tr); await load(tab, tr); });
+  const openItem = (it) => (it.folder ? go([...trail, { id: it.id, name: it.name }]) : run(async () => { const r = await callFn("onedrive", { action: "client_open", engagement_id: e.id, item: it.id }); window.open(r.url, "_blank", "noopener"); }));
+  const upload = (files) => run(async () => {
+    const list = [...files];
+    const rootId = here?.id ?? (await callFn("onedrive", { action: "client_list", engagement_id: e.id, folder: tab })).root;
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      setProg({ name: f.name, pct: 0, n: i + 1, of: list.length });
+      await uploadToOneDrive({ engagementId: e.id, item: here?.id ?? rootId, file: f, onProgress: (p) => setProg({ name: f.name, pct: p, n: i + 1, of: list.length }) });
+      await callFn("onedrive", { action: "client_uploaded", engagement_id: e.id, name: f.name, folder: tab });
+    }
+    setProg(null); await load(tab, trail);
+  }, files.length === 1 ? "Uploaded. Thank you." : `${files.length} files uploaded. Thank you.`).then(() => setProg(null));
+  return (
+    <Card title="Documents">
+      <div className="tabs" style={{ margin: "0 0 12px" }}>{TABS.map(([k, l]) => <button key={k} className={`tab${tab === k ? " on" : ""}`} onClick={() => setTab(k)}>{l}</button>)}</div>
+      {none ? <span className="muted small">Your folders are being set up. Please check back shortly.</span> : (
+        <>
+          {trail.length > 0 && <div className="row wrap" style={{ gap: 6, marginBottom: 8 }}><button className="btn" onClick={() => go([])}>{TABS.find(([k]) => k === tab)?.[1]}</button>{trail.map((t, i) => <React.Fragment key={t.id}><span className="muted">›</span><button className="btn" onClick={() => go(trail.slice(0, i + 1))}>{t.name}</button></React.Fragment>)}</div>}
+          {items === null ? <span className="muted small">Loading…</span> : items.length === 0 ? <span className="muted small">{tab === "deliverables" ? "Nothing here yet. Our reports for you will appear here." : "Nothing here yet."}</span> : (
+            <div className="stack" style={{ gap: 4, opacity: busy ? .6 : 1 }}>
+              {items.map((it) => (
+                <div key={it.id} className="leadrow" onClick={() => openItem(it)} title={it.folder ? "Open folder" : "Open"}>
+                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileIcon(it)} <span style={{ fontWeight: it.folder ? 600 : 500 }}>{it.name}</span></span>
+                  <span className="muted small" style={{ flex: "none" }}>{it.folder ? `${it.count ?? ""} item${it.count === 1 ? "" : "s"}` : fileSize(it.size)}{it.modified ? ` · ${day(it.modified)}` : ""}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {canUpload && (
+            <div style={{ marginTop: 12 }}>
+              {prog && <div className="small" style={{ marginBottom: 8 }}>Uploading {prog.name}{prog.of > 1 ? ` (${prog.n} of ${prog.of})` : ""} · {Math.round(prog.pct * 100)}%<div style={{ height: 6, background: "var(--border-sub)", borderRadius: 3, marginTop: 4 }}><div style={{ width: `${Math.round(prog.pct * 100)}%`, height: 6, background: "var(--accent)", borderRadius: 3 }} /></div></div>}
+              <DropZone busy={busy} onFiles={(fs) => upload([...fs])} label={`Drop files here${here ? ` (into ${here.name})` : ""}, or click to choose. Any size, as many as you need.`} />
+            </div>
+          )}
+          {preview && tab !== "deliverables" && <span className="muted small">Uploading is disabled in the staff preview.</span>}
+        </>
+      )}
+    </Card>
+  );
+}
+
 /** The client's page: where the project stands, their folders, anything to sign, and invoices. */
 function PortalHome({ e, agreements, invoices, reload, preview }) {
   const [signing, setSigning] = useState(null);
@@ -3691,14 +3770,8 @@ function PortalHome({ e, agreements, invoices, reload, preview }) {
         ) : (
           <div className="grid2">
             <div className="stack" style={{ gap: 16 }}>
-              <Card title="Your folders">
-                {mine ? (
-                  <>
-                    <div className="row wrap" style={{ gap: 8, marginBottom: 8 }}>{(mine.items ?? []).map((it) => <a key={it.item} className="btn primary" href={it.url} target="_blank" rel="noreferrer">{nice(it.name)}</a>)}</div>
-                    <p className="small" style={{ margin: 0 }}>Uploads: put your documents here, any size, as many as you need, whole folders too. Deliverables: our reports for you.{(mine.items ?? []).some((it) => /data room/i.test(it.name)) ? " Virtual Data Room: the documents buyers will see." : ""} The first time, Microsoft emails you a short code to confirm it's you.</p>
-                  </>
-                ) : <span className="muted small">Your document folders appear here once we open them for you.</span>}
-              </Card>
+              <ClientDocuments e={e} preview={preview} />
+              {mine && <p className="muted small" style={{ margin: 0 }}>You can also open these folders in OneDrive: {(mine.items ?? []).map((it, i) => <React.Fragment key={it.item}>{i > 0 && " · "}<a href={it.url} target="_blank" rel="noreferrer">{nice(it.name)}</a></React.Fragment>)}</p>}
               {(toSign.length > 0 || signed.length > 0) && (
                 <Card title="Engagement">
                   <div className="stack" style={{ gap: 8 }}>
