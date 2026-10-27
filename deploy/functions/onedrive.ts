@@ -121,14 +121,19 @@ Deno.serve(async (req) => {
   }
   const me = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } }, auth: { persistSession: false } });
   const { data: isStaff } = await me.rpc("is_staff");
-  const clientAction = ["client_list", "client_open", "client_uploaded"].includes(body.action) || (body.action === "upload_session" && !isStaff);
+  const clientAction = ["client_list", "client_open"].includes(body.action) || (["client_uploaded", "upload_session"].includes(body.action) && !isStaff);
   if (!isStaff && !clientAction) return json({ error: "staff only" }, 403);
   try {
     // ---- the client's own page: only their engagement, only folders 3, 4 and 5
     if (clientAction) {
-      const { data: mineRaw } = await me.rpc("portal_my_engagement");
-      const mine: any = Array.isArray(mineRaw) ? mineRaw[0] : mineRaw;
-      if (!mine?.id || mine.id !== body.engagement_id) return json({ error: "not your project" }, 403);
+      let mine: any = null;
+      if (isStaff) {                       // staff preview of the client's page
+        mine = { id: body.engagement_id, client_email: (await me.auth.getUser()).data.user?.email ?? "staff" };
+      } else {
+        const { data: mineRaw } = await me.rpc("portal_my_engagement");
+        mine = Array.isArray(mineRaw) ? mineRaw[0] : mineRaw;
+        if (!mine?.id || mine.id !== body.engagement_id) return json({ error: "not your project" }, 403);
+      }
       const { data: e } = await db.from("engagements").select("*").eq("id", mine.id).single();
       if (!e?.onedrive_folder_id) return json({ ok: true, items: [], none: true });
       const roots = new Map<string, any>();
