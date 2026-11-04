@@ -21,6 +21,7 @@
 //   POST { action: "upload_session", engagement_id, item, name, size }   a Microsoft upload link; the browser sends the file straight to OneDrive
 //     (staff: anywhere inside the project folder; the client: only inside 4. Uploads or 5. Virtual Data Room)
 //   POST { action: "client_uploaded", engagement_id, name, folder }  logs the upload so staff see it (bell, digest)
+// Version 1.11 (4 Nov 2026): the Raise Your Exit Price Install deck (kind exit_price_install) syncs into 2. Workings like the builder.
 // Version 1.10 (27 Oct 2026): fix: the client could not open a file lying directly in 3/4/5 (the folder check compared paths that Graph had not returned); now walks up by parent id.
 //   Also: client_open reads the full item for the download link, with /content as fallback; new staff action "open" (same, inside the project folder).
 // Version 1.9 (27 Oct 2026): uploads only into 4. Uploads (client page and client access); the Virtual Data Room is view and download for everyone.
@@ -48,7 +49,7 @@ const G = "https://graph.microsoft.com/v1.0";
 const SUB = { nda: "1. Engagement Letter & NDA", work: "2. Workings", deliv: "3. Deliverables", uploads: "4. Uploads", vdr: "5. Virtual Data Room" };
 const kindToSub: Record<string, string> = {
   nda: SUB.nda, engagement_letter: SUB.nda, invoice: SUB.nda, client_upload: SUB.uploads,
-  valuation_builder: SUB.work, six_page_review: SUB.work, working_paper: SUB.work, other: SUB.work,
+  valuation_builder: SUB.work, exit_price_install: SUB.work, six_page_review: SUB.work, working_paper: SUB.work, other: SUB.work,
   draft_report: SUB.deliv, final_report: SUB.deliv,
 };
 

@@ -238,7 +238,7 @@ button.step:hover { color: var(--brand); }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.33";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.34";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -874,6 +874,7 @@ async function saveTemplate(key, tpl) { const cur = await loadTemplates(); const
 const DEFAULT_TEMPLATES = {
   nda: { subject: "{company} - Non Disclosure Agreement", text: "Dear {first},\n\nThank you for our call. As discussed, attached is our Mutual Non-Disclosure Agreement so you can share your financial information with full confidentiality.\n\nPlease sign it and send it back by replying to this email. Once we have it, we will send you the next steps.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
   scorecard: { subject: "It was a pleasure to meet you: your Buyer Discount Scorecard", text: "Dear {first},\n\nIt was a pleasure to meet you today. As promised, attached is your Buyer Discount Scorecard: the twenty points a buyer will look at when they price {company}, so you can see where you stand before anyone else does.\n\nGo through it at your own pace. Our proposal with the next steps will follow shortly.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
+  install: { subject: "{company}: The Raise Your Exit Price Install", text: "Hi {first},\n\nThank you for the call today. Attached is The Raise Your Exit Price Install for {company}, with the numbers we went through: what a buyer would pay today, what is pulling that price down, and how we raise it in 90 days on the same profit.\n\nIf you would like to start with Phase 1, reply to this email or use the payment link on the last page and I will book your intake call the same day.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
   builder: { subject: "{company}: your Market Example Range", text: "Hi {first},\n\nThank you for the call today. Attached is the Market Example Range for {company}, built from the figures you gave me on the call.\n\nPlease read it as a market sample, not a valuation: it shows what buyers in your sector are paying today and where {company} would sit on standard assumptions.\n\nIf you would like to go ahead, reply to this email and I will send the engagement letter and the next steps the same day.\n\nKind regards,\nKyriacos\nUK-Qualified Chartered Accountant (ICAEW)\nConsortia Advisory" },
 };
 const fillTpl = (t, v) => String(t ?? "").replace(/\{(\w+)\}/g, (m, k) => (v[k] ?? m));
@@ -1333,7 +1334,7 @@ function EmailTemplates() {
   const [run, busy] = useAction();
   const [t, setT] = useState(null);
   const [dirty, setDirty] = useState(false);
-  useEffect(() => { loadTemplates().then((v) => setT({ scorecard: v.scorecard ?? DEFAULT_TEMPLATES.scorecard, nda: v.nda ?? DEFAULT_TEMPLATES.nda, builder: v.builder ?? DEFAULT_TEMPLATES.builder })); }, []);
+  useEffect(() => { loadTemplates().then((v) => setT({ scorecard: v.scorecard ?? DEFAULT_TEMPLATES.scorecard, nda: v.nda ?? DEFAULT_TEMPLATES.nda, install: v.install ?? DEFAULT_TEMPLATES.install, builder: v.builder ?? DEFAULT_TEMPLATES.builder })); }, []);
   const upd = (k, f, v) => { setT({ ...t, [k]: { ...t[k], [f]: v } }); setDirty(true); };
   const save = () => run(async () => {
     const { error } = await supabase.from("app_settings").upsert({ key: "email_templates", value: t, updated_at: new Date().toISOString() });
@@ -1342,7 +1343,7 @@ function EmailTemplates() {
   if (!t) return null;
   return (
     <Card title="Email templates" right={<span className="muted small">Placeholders: {"{first} {company}"}</span>}>
-      {[["scorecard", "Scorecard email (sent when a lead moves from Free Call Booked to Free Call Showed)"], ["nda", "NDA email (from the lead)"], ["builder", "Valuation email (Send to client)"]].map(([k, label]) => (
+      {[["scorecard", "Scorecard email (sent when a lead moves from Free Call Booked to Free Call Showed)"], ["nda", "NDA email (from the lead)"], ["install", "Install deck email (Send to client)"], ["builder", "Market Example Range email (Send to client)"]].map(([k, label]) => (
         <div key={k} style={{ marginBottom: 14 }}>
           <h3 style={{ margin: "0 0 6px" }}>{label}</h3>
           <input style={{ width: "100%", marginBottom: 6 }} value={t[k].subject} onChange={(x) => upd(k, "subject", x.target.value)} placeholder="Subject" />
@@ -1486,13 +1487,22 @@ function EmailDialog({ title, to, subject, text, attached, then, onSend, onCance
   );
 }
 
+/** The two decks made for a lead: the Raise Your Exit Price Install (from the form's profit band) and the older Market Example Range. */
+const BUILDERS = {
+  exit_price_install: { title: "Raise Your Exit Price Install", suffix: " - Raise Your Exit Price Install", page: "/ExitPriceInstall.html", tpl: "install", open: "Open the Install deck for this lead", empty: "None yet. Open the deck: it fills itself from the form (profit band, name, company). Check the profit, press Save PDF to Solonos, then send it from here." },
+  valuation_builder: { title: "Valuation Builder (Market Example Range)", suffix: " - Market Example Range", page: "/ConsortiaValuationBuilder.html", tpl: "builder", open: "Open Valuation Builder for this lead", empty: "None yet. Open the builder for this lead, press Print when done: the PDF is saved here automatically." },
+};
 function LeadBuilders({ lead, reload }) {
+  return <><LeadDeck lead={lead} reload={reload} kind="exit_price_install" /><LeadDeck lead={lead} reload={reload} kind="valuation_builder" /></>;
+}
+function LeadDeck({ lead, reload, kind }) {
+  const cfg = BUILDERS[kind];
   const [run, busy] = useAction();
   const [docs, setDocs] = useState([]);
   const load = useCallback(async () => {
-    const { data } = await supabase.from("documents").select("*").eq("opportunity_id", lead.ghl_id).eq("kind", "valuation_builder").order("created_at", { ascending: false });
+    const { data } = await supabase.from("documents").select("*").eq("opportunity_id", lead.ghl_id).eq("kind", kind).order("created_at", { ascending: false });
     setDocs(data ?? []);
-  }, [lead.ghl_id]);
+  }, [lead.ghl_id, kind]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     const ch = new BroadcastChannel("solonos");
@@ -1500,23 +1510,23 @@ function LeadBuilders({ lead, reload }) {
     return () => ch.close();
   }, [lead.ghl_id, load]);
   const open = async (path) => window.open(await signedUrl(path), "_blank");
+  const company = lead.company || lead.name.split("|")[0].trim();
   async function upload(file) {
     await run(async () => {
       const path = `leads/${lead.ghl_id}/${Date.now()}-${file.name}`;
       const { error } = await supabase.storage.from("deliverables").upload(path, file);
       if (error) throw new Error(error.message);
-      const { error: e2 } = await supabase.from("documents").insert({ opportunity_id: lead.ghl_id, kind: "valuation_builder", name: `${lead.company || lead.name.split("|")[0].trim()} - Market Example Range`, storage_path: `deliverables/${path}`, visibility: "internal", uploaded_by: "staff" });
+      const { error: e2 } = await supabase.from("documents").insert({ opportunity_id: lead.ghl_id, kind, name: `${company}${cfg.suffix}`, storage_path: `deliverables/${path}`, visibility: "internal", uploaded_by: "staff" });
       if (e2) throw new Error(e2.message);
       await load(); await reload?.();
-    }, "Valuation Builder saved on this lead");
+    }, `${cfg.title} saved on this lead`);
   }
   const [sending, setSending] = useState(null);   // the document about to be emailed
   const [draft, setDraft] = useState(null);      // { to, subject, text } for the dialog
   const openSend = async (d) => {
-    const tpl = (await loadTemplates()).builder ?? DEFAULT_TEMPLATES.builder;
-    const company = d.name.replace(/ - Market Example Range$/, "");
+    const tpl = (await loadTemplates())[cfg.tpl] ?? DEFAULT_TEMPLATES[cfg.tpl];
     const first = lead.first_name || lead.name.split("|")[0].trim().split(" ")[0];
-    const v = { first, company };
+    const v = { first, company: d.name.replace(cfg.suffix, "") };
     setDraft({ to: lead.email || "", subject: fillTpl(tpl.subject, v), text: fillTpl(tpl.text, v), vars: v });
     setSending(d);
   };
@@ -1525,16 +1535,15 @@ function LeadBuilders({ lead, reload }) {
     await run(async () => {
       const blob = await (await fetch(await signedUrl(d.storage_path))).blob();
       const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = () => rej(new Error("Could not read the PDF")); r.readAsDataURL(blob); });
-      const company = d.name.replace(/ - Market Example Range$/, "");
       await callFn("send-email", {
         to: m.to, subject: m.subject,
         html: mailShell(textToHtml(m.text)),
-        attachment: { filename: `${company} - Market Example Range.pdf`, contentBase64: b64, contentType: "application/pdf" },
+        attachment: { filename: `${d.name}.pdf`, contentBase64: b64, contentType: "application/pdf" },
       });
-      if (m.saveTpl) { try { await saveTemplate("builder", { subject: unfill(m.subject, draft?.vars), text: unfill(m.text, draft?.vars) }); } catch (e) { /* best effort */ } }
+      if (m.saveTpl) { try { await saveTemplate(cfg.tpl, { subject: unfill(m.subject, draft?.vars), text: unfill(m.text, draft?.vars) }); } catch (e) { /* best effort */ } }
       await supabase.from("documents").update({ sent_at: new Date().toISOString() }).eq("id", d.id);
       const { data: me } = await supabase.auth.getUser();
-      await supabase.from("lead_notes").insert({ opportunity_id: lead.ghl_id, body: `Market Example Range emailed to ${m.to}`, author: me?.user?.email ?? "staff" });
+      await supabase.from("lead_notes").insert({ opportunity_id: lead.ghl_id, body: `${cfg.title} emailed to ${m.to}`, author: me?.user?.email ?? "staff" });
       // the follow-up starts by itself: touch 1 the next working day, then every 3 working days
       try { await rpc("followup_start", { p_opportunity: lead.ghl_id, p_kind: "valuation" }); } catch (e) { console.warn("follow-up", e); }
       // the offer is out: the lead moves to Full Offer Made in GHL
@@ -1555,9 +1564,9 @@ function LeadBuilders({ lead, reload }) {
   }, "Removed");
   return (
     <>
-      <h3>Valuation Builder</h3>
+      <h3>{cfg.title}</h3>
       <div className="stack" style={{ margin: "8px 0 18px", gap: 6 }}>
-        {docs.length === 0 && <span className="muted small">None yet. Open the builder for this lead, press Print when done: the PDF is saved here automatically. It moves with the lead into the engagement and the client sees it on their page.</span>}
+        {docs.length === 0 && <span className="muted small">{cfg.empty}</span>}
         {docs.map((d) => (
           <div key={d.id} className="row between small">
             <span>{d.name}<div className="muted">{ago(d.created_at)}{d.sent_at && <> · <span style={{ color: "var(--ok)" }}>sent {day(d.sent_at)}</span></>}</div></span>
@@ -1570,7 +1579,7 @@ function LeadBuilders({ lead, reload }) {
         ))}
         {sending && draft && <EmailDialog title={`Send to ${lead.first_name || lead.name.split("|")[0].trim()}`} to={draft.to} subject={draft.subject} text={draft.text} attached={`${sending.name}.pdf`} then="Lead moves to Full Offer Made and the follow-up starts (first touch next working day)" busy={busy} onSend={(m) => sendToClient(sending, m)} onCancel={() => setSending(null)} />}
         <div className="row">
-          <a className="btn primary" href={`/ConsortiaValuationBuilder.html?lead=${encodeURIComponent(lead.ghl_id)}&v=${Date.now()}`} target="_blank" rel="noreferrer">Open Valuation Builder for this lead</a>
+          <a className="btn primary" href={`${cfg.page}?lead=${encodeURIComponent(lead.ghl_id)}&v=${Date.now()}`} target="_blank" rel="noreferrer">{cfg.open}</a>
           <label className="btn" style={{ cursor: "pointer" }}>{busy ? "Uploading…" : "Attach a PDF"}<input type="file" accept=".pdf" style={{ display: "none" }} disabled={busy} onChange={(x) => x.target.files[0] && upload(x.target.files[0])} /></label>
         </div>
       </div>
@@ -3316,7 +3325,7 @@ function NotesCard({ e, contact, reload }) {
   const [vb, setVb] = useState([]);
   const load = useCallback(async () => {
     if (e.opportunity_id) { const { data } = await supabase.from("call_recordings").select("*").eq("opportunity_id", e.opportunity_id).order("call_no"); setRecs(data ?? []); }
-    const { data: d } = await supabase.from("documents").select("*").eq("engagement_id", e.id).in("kind", ["valuation_builder", "six_page_review"]).order("created_at", { ascending: false });
+    const { data: d } = await supabase.from("documents").select("*").eq("engagement_id", e.id).in("kind", ["exit_price_install", "valuation_builder", "six_page_review"]).order("created_at", { ascending: false });
     setVb(d ?? []);
   }, [e.id, e.opportunity_id]);
   useEffect(() => { load(); }, [load]);

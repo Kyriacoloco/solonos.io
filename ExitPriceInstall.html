@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Raise Your Exit Price Install</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  /* ---- the deck: 22 slides, 1280 x 720, cream paper, one gold dash top-left ---- */
+  :root { --paper: #F6F1E8; --ink: #1E222B; --muted: #6B6F7A; --gold: #B8942F; --card: #FBF8F2; --line: #E3DCCF; --red: #A33A2A; --green: #2E7D4F; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #DDD6C8; font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); }
+  #deck { padding: 32px 0 80px; }
+  .slide { position: relative; width: 1280px; height: 720px; margin: 0 auto 28px; background: var(--paper); padding: 88px 96px 72px; overflow: hidden; box-shadow: 0 6px 30px rgba(0,0,0,.12); }
+  .slide::before { content: ""; position: absolute; left: 96px; top: 48px; width: 30px; height: 2px; background: var(--gold); }
+  .slide .num { position: absolute; right: 40px; bottom: 28px; font-size: 12px; color: var(--muted); }
+  .kicker { font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--gold); margin: 0 0 14px; }
+  h1 { font-size: 54px; line-height: 1.08; font-weight: 800; letter-spacing: -.02em; margin: 0 0 22px; }
+  h2 { font-size: 40px; line-height: 1.15; font-weight: 700; letter-spacing: -.02em; margin: 0 0 20px; max-width: 1040px; }
+  h2.big { font-size: 62px; line-height: 1.05; font-weight: 800; }
+  p, li { font-size: 19px; line-height: 1.5; margin: 0 0 14px; max-width: 980px; }
+  p.lead { font-size: 23px; }
+  p.small { font-size: 15px; color: var(--muted); }
+  ul { margin: 0 0 14px; padding-left: 26px; }
+  li { margin-bottom: 8px; }
+  b { font-weight: 700; }
+  .gold { color: var(--gold); font-weight: 700; }
+  .muted { color: var(--muted); }
+  .cards { display: flex; gap: 22px; margin: 26px 0 10px; }
+  .card { flex: 1; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 24px 26px; }
+  .card .kicker { margin-bottom: 8px; }
+  .card .sub { font-size: 14px; color: var(--muted); margin: 0 0 6px; }
+  .card .val { font-size: 42px; font-weight: 700; letter-spacing: -.02em; margin: 0; }
+  .card .val.serif { font-family: "Playfair Display", Georgia, serif; }
+  .stat { font-size: 64px; font-weight: 700; letter-spacing: -.03em; line-height: 1; }
+  .stat.serif { font-family: "Playfair Display", Georgia, serif; font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 22px; }
+  .lineitem { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid var(--line); padding: 10px 0; font-size: 18px; }
+  .lineitem span:last-child { font-weight: 600; }
+  .phases { display: flex; gap: 20px; margin-top: 10px; }
+  .phase { flex: 1; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px 22px; }
+  .phase .n { color: var(--gold); font-weight: 800; font-size: 22px; }
+  .phase .d { float: right; font-size: 11px; letter-spacing: .12em; color: var(--muted); font-weight: 700; margin-top: 6px; }
+  .phase .t { font-weight: 700; font-size: 19px; margin-top: 10px; }
+  .timeline { position: relative; height: 24px; margin: 28px 0 8px; }
+  .timeline .bar { position: absolute; left: 0; right: 0; top: 11px; height: 2px; background: var(--line); }
+  .timeline .bar i { position: absolute; left: 0; top: 0; height: 2px; width: 33%; background: var(--gold); }
+  .timeline .tick { position: absolute; top: -8px; font-size: 11px; font-weight: 700; letter-spacing: .12em; color: var(--muted); }
+  .levers { margin-top: 14px; }
+  .lever { display: flex; justify-content: space-between; font-size: 14px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .lever .st { font-weight: 700; }
+  .lever .cut { color: var(--red); } .lever .fix { color: var(--green); } .lever .prog { color: var(--gold); }
+  .arrow { font-size: 40px; color: var(--gold); flex: none; }
+  .track { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 34px 40px; text-align: center; max-width: 900px; margin: 10px auto 0; }
+  .track .kicker { color: var(--muted); }
+  .track .big { font-family: "Playfair Display", Georgia, serif; font-size: 96px; font-weight: 600; line-height: 1; margin: 6px 0 10px; }
+  .track .big sup { font-size: 34px; vertical-align: top; margin-left: 4px; }
+  .track .nomad { font-size: 11px; letter-spacing: .3em; margin-top: 26px; color: var(--muted); display: flex; justify-content: space-between; }
+  .tagline { font-size: 26px; font-weight: 600; margin-top: 18px; }
+  .center { text-align: center; }
+  .mid { display: flex; flex-direction: column; justify-content: center; height: 100%; }
+  u { text-decoration: underline; text-underline-offset: 3px; }
+
+  /* ---- controls (never printed) ---- */
+  #panel { position: fixed; right: 18px; top: 18px; z-index: 50; width: 300px; background: #1E222B; color: #F6F1E8; border-radius: 12px; padding: 14px 16px; box-shadow: 0 10px 30px rgba(0,0,0,.3); font-size: 13px; }
+  #panel h3 { margin: 0 0 8px; font-size: 14px; }
+  #panel label { display: block; margin: 8px 0 3px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #BFB7A8; }
+  #panel input, #panel select { width: 100%; padding: 7px 9px; border-radius: 8px; border: 1px solid #3A404D; background: #2A2F3A; color: #F6F1E8; font: 500 13px Inter, sans-serif; }
+  #panel .btns { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  #panel button { flex: 1; padding: 9px 10px; border-radius: 8px; border: 0; font: 600 13px Inter, sans-serif; cursor: pointer; background: #3A404D; color: #F6F1E8; }
+  #panel button.primary { background: #B8942F; color: #1E222B; }
+  #panel .status { margin-top: 10px; font-size: 12px; color: #BFB7A8; min-height: 16px; }
+  #panel .hint { font-size: 11px; color: #BFB7A8; margin-top: 6px; }
+  .notes { width: 1280px; margin: -16px auto 28px; font-size: 13px; color: #4B4F58; background: #EFE9DD; border-radius: 8px; padding: 10px 14px; display: none; white-space: pre-wrap; }
+  body.show-notes .notes { display: block; }
+  @media print {
+    @page { size: 1280px 720px; margin: 0; }
+    html, body { background: #fff; }
+    #deck { padding: 0; }
+    .slide { margin: 0; box-shadow: none; page-break-after: always; }
+    .no-print, .notes { display: none !important; }
+  }
+  html.capture .no-print, html.capture .notes { display: none !important; }
+  html.capture #deck { padding: 0; }
+  html.capture .slide { margin: 0; box-shadow: none; }
+</style>
+</head>
+<body>
+
+<div id="panel" class="no-print">
+  <h3>Raise Your Exit Price Install</h3>
+  <div id="who" class="hint">Not linked to a lead. Add ?lead=&lt;id&gt; or pick one below.</div>
+  <select id="pick" style="display:none; margin-top:6px"></select>
+  <label>First name</label><input id="first" placeholder="e.g. Maria">
+  <label>Company</label><input id="company" placeholder="e.g. ThermoClean Ltd">
+  <label>Yearly profit (€) <span id="band" style="text-transform:none; letter-spacing:0"></span></label><input id="profit" type="number" step="10000" min="0" placeholder="500000">
+  <div class="row" style="gap:8px">
+    <div style="flex:1"><label>Multiple now</label><input id="m1" type="number" step="0.5" value="4"></div>
+    <div style="flex:1"><label>Multiple fixed</label><input id="m2" type="number" step="0.5" value="5"></div>
+  </div>
+  <div class="btns">
+    <button class="primary" id="save">Save PDF to Solonos</button>
+    <button id="print">Print</button>
+    <button id="notesBtn">Notes</button>
+  </div>
+  <div class="status" id="status"></div>
+  <div class="hint">The profit comes from the lead's form (midpoint of the band they ticked). Type the real figure from the call before saving.</div>
+</div>
+
+<div id="deck"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script type="module">
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+
+// ---------- numbers ----------
+const S = { first: "", company: "", profit: 500000, m1: 4, m2: 5, band: "" };
+const eur = (n) => "€" + Math.round(n).toLocaleString("en-US");
+const short = (n) => n >= 1e6 ? "€" + (Math.round(n / 1e5) / 10).toFixed(1) + "M" : n >= 1e3 ? "€" + Math.round(n / 1e3) + "k" : eur(n);
+const pct = (a, b) => Math.round((b / a - 1) * 100);
+/** "€200k–€500k" → 350000, "Under €200k" → 150000, "Over €1M" → 1500000, "€1–3 million" → 2000000 */
+function profitFromBand(t) {
+  if (!t) return null;
+  const s = String(t).toLowerCase().replace(/,/g, "");
+  const unit = /million|\bm\b|m\s*$|m[^a-z]/.test(s) ? 1e6 : /k/.test(s) ? 1e3 : 1;
+  const nums = [...s.matchAll(/(\d+(?:\.\d+)?)\s*(k|m|million)?/g)].map((m) => Number(m[1]) * (m[2] ? (m[2].startsWith("m") ? 1e6 : 1e3) : unit));
+  if (!nums.length) return null;
+  if (/under|below|less/.test(s)) return nums[0] * 0.75;
+  if (/over|above|more/.test(s)) return nums[0] * 1.5;
+  return nums.length >= 2 ? (nums[0] + nums[1]) / 2 : nums[0];
+}
+
+// ---------- the slides (text as in the deck; only the money changes with the lead) ----------
+function slides() {
+  const P = S.profit, now = P * S.m1, fixed = P * S.m2, gain = fixed - now, up = pct(now, fixed), three = now * 0.03, five = now * 1.05;
+  const who = S.company ? `Prepared for ${S.first ? S.first + ", " : ""}${S.company}` : S.first ? `Prepared for ${S.first}` : "";
+  return [
+    { html: `<div class="mid"><h1>The Raise Your Exit Price™ Install</h1>
+      <p class="lead" style="max-width:1040px">We Show You What A Buyer Would Pay For Your Business Today, Fix What's Pulling That Number Down, And Raise Your Exit Price In 90 Days... <span class="gold">Without Adding A Single Euro Of Profit!</span></p>
+      <p class="small">For owners of €1M+ revenue businesses in Europe who want to sell in the next 12–36 months, and don't have a live deal yet.</p>
+      ${who ? `<p class="small" style="margin-top:34px"><b>${esc(who)}</b></p>` : ""}</div>`, notes: "" },
+    { html: `<p class="kicker">Who you're talking to</p><h2>Kyriacos Papademetriou</h2>
+      <p>Business Sale Advisor, Nomad Structures. 10 years sitting across the table from buyers.</p>
+      <div class="cards"><div class="card"><p class="val">50+</p><p class="kicker" style="margin-top:10px">Business sales advised</p></div><div class="card"><p class="val">10</p><p class="kicker" style="margin-top:10px">Years in business advisory</p></div><div class="card"><p class="val">5</p><p class="kicker" style="margin-top:10px">Industries: manufacturing, IP, SaaS, energy, hospitality</p></div></div>`,
+      notes: "[Keep this short. Ten seconds, then move on.] If you've read the Playbook, you know a bit about me already. I've spent fifteen years sitting across the table from buyers, on more than fifty business sales, across IP, SaaS, Energy and Hospitality. Today I want to show you how we use that on your business." },
+    { html: `<h2>Most owners carry a number around in their head.</h2><ul><li>Something a friend sold for.</li><li>Something accountant said once over coffee.</li><li>Or just the number they need to retire.</li></ul>
+      <p><b>But nobody has ever looked at the business the way a buyer will.</b> <span class="gold">And nobody has told them what a buyer is going to knock off the price.</span></p>`,
+      notes: "For years, most owners we meet run their business the same way... They work hard, grow revenue, keep profit healthy, and assume that when the day comes, a buyer will simply \"see the value\"... They carry a number around in their head. Something a friend sold for. Something an accountant said once over coffee. Or just the number they need to retire. But nobody has ever looked at the business the way a buyer will. And nobody has told them what a buyer is going to knock off the price." },
+    { html: `<div class="mid"><p class="lead muted">Then a buyer finally looks...</p><h2 class="big">...and the number drops.</h2></div>`, notes: "Then a buyer finally looks... and the number drops. [Pause here. Let it land before moving on.]" },
+    { html: `<h2>Not because the business is bad.</h2><p>Because a buyer spots things that make the business look risky. We find lots of small ones in most businesses. These are the biggest:</p>
+      <ul><li><b>Depended on the Owner</b></li><li><b>Few customers</b> bring in most of the money.</li><li>The financials and the structure makes sense to you, but not to a stranger.</li><li><b>No recurring profit</b> once you step back.</li></ul>
+      <p class="small">You'll get a Scorecard after this call: 20 more areas buyers cut value.</p>`,
+      notes: "Not because the business is bad. Because a buyer spots things that make the business look risky. We find lots of small ones in most businesses. These are the biggest: - It still runs through you. When you're away, decisions wait. - A few customers bring in most of the money. - The books make sense to you, but not to a stranger. - Nothing proves the profit keeps coming once you step back. There are about 20 ways buyers cut value in total. You'll get the full Scorecard with all of them after this call." },
+    { html: `<h2>None of that shows up in your profit. All of it shows up in your business value.</h2>
+      <p>Each one is a reason for the buyer to pay less. A buyer pays a <i>multiple</i> of your yearly profit, and it comes down to one question: <i>how risky is this business once the owner leaves?</i></p>
+      <div class="cards"><div class="card"><p class="kicker">With those problems</p><p class="sub">${short(P)} profit × ${S.m1}</p><p class="val">${short(now)}</p></div><div class="card" style="border-color:var(--ink)"><p class="kicker">With those problems fixed</p><p class="sub">${short(P)} profit × ${S.m2}</p><p class="val">${short(fixed)}</p></div></div>
+      <div class="row" style="margin-top:22px"><span class="stat serif">${eur(gain)}</span><span style="font-size:18px;font-weight:600;max-width:420px">${up}% more, gained at the negotiating table. Same profit.</span></div>`,
+      notes: `None of that shows up in your profit. All of it shows up in your price. Each one is a reason for the buyer to pay less, and they will find every one. The multiple isn't random. It comes down to one question a buyer keeps asking: how risky is this business once the owner leaves? Here's the napkin math. A buyer pays a multiple of your yearly profit. Take your business with ${short(P)} a year in profit. With those problems, a buyer pays about ${S.m1} times profit: ${short(now)}. With those problems fixed, it's ${S.m2} times: ${short(fixed)}. That's ${eur(gain)}, gone at the negotiating table, on exactly the same profit. Lower the risk they see, and the same profit sells for more. Not more revenue. Less risk, with proof.` },
+    { html: `<div class="mid"><h2>The owner who gets paid more does one thing differently.</h2><p class="lead">They look at their business through a buyer's eyes first, and fix the biggest problems while there's still time.</p></div>`, notes: "" },
+    { html: `<h2>Same business. Same profit. A higher price.</h2><p>That's what happens when you fix what buyers pay less for, before you sell.</p>
+      <p><b>You don't have to</b> grow revenue another 30% to get a better price.</p><p><b>You don't have to</b> wait for a buyer to tell you what's wrong.</p><p><b>You don't have to</b> pay ~€6,000 for a valuation report that ends up in a drawer.</p>`,
+      notes: "Same business. Same profit. A higher price. That's what happens when you fix what buyers pay less for, before you sell. You don't have to grow revenue another 30% to get a better price. You don't have to wait for a buyer to tell you what's wrong. You don't have to guess your number from what a friend sold for. You don't have to pay ~€6,000 for a valuation report that ends up in a drawer. And you don't have to find out at the finish line that your business is worth 20% less than you planned. Instead: no more guessing your number, it's on paper. No more vague advice, you get the things that cost you most, ranked, with a plan for each. And no more hoping a buyer believes you, you hand them a folder with the proof." },
+    { html: `<p class="kicker">What you get on paper</p><h2>Day 14 tells you where you stand.<br>Day 90 shows how far it moved.</h2>
+      <div class="row" style="align-items:stretch">
+        <div class="card" style="flex:1"><p class="kicker">Day 14 · Your exit price today</p><p class="sub">Price a buyer would pay</p><p class="val">${short(now)}</p><p class="kicker" style="margin-top:16px">What's cutting your price, ranked</p>
+          <div class="levers"><div class="lever"><span>Relies on the owner</span><span class="st cut">Cutting value</span></div><div class="lever"><span>Few customers = most revenue</span><span class="st cut">Cutting value</span></div><div class="lever"><span>Financials a buyer can't easily check</span><span class="st cut">Cutting value</span></div></div></div>
+        <div class="arrow">→</div>
+        <div class="card" style="flex:1"><p class="kicker">Day 90 · Your updated exit price</p><p class="sub">Price a buyer would pay</p><p class="val">${short(fixed)}</p><p class="kicker" style="margin-top:16px">Where each lever stands</p>
+          <div class="levers"><div class="lever"><span>Lever 1</span><span class="st fix">Fixed + evidence</span></div><div class="lever"><span>Lever 2</span><span class="st fix">Fixed + evidence</span></div><div class="lever"><span>Lever 3</span><span class="st prog">In progress</span></div></div></div>
+      </div>`,
+      notes: `Day 14 tells you where you stand. Day 90 shows how far it moved. [Walk them through the example: Day 14, the price range a buyer would pay today, around ${short(now)}, and what's cutting value, ranked. Day 90, the updated range, around ${short(fixed)}, on the same profit, with each lever fixed and backed by evidence.]` },
+    { html: `<h2>This is what we've seen with the owners we've worked with...</h2>
+      <div class="track"><p class="kicker">Our track record</p><div class="big">~27<sup>%</sup></div><p style="margin:0;font-size:18px">average increase in estimated business value</p><p class="small" style="margin:4px 0 0"><i>across Nomad clients so far</i></p><p class="small" style="margin-top:18px">That's our history, not a promise for your business.<br>Your own number starts on your Day-14 page.</p><div class="nomad"><span>NOMAD</span><span style="letter-spacing:0">Historical average. Not a guarantee of any outcome.</span></div></div>`,
+      notes: "This is what we've seen with the owners we've worked with... Across Nomad clients, estimated business value has gone up by about 27% on average. To be clear: that's our history, not a promise for your business. Your number starts on your own Day-14 page." },
+    { html: `<div class="mid"><h2>Start late, and the fix is still a story.<br>Start now, and it's a track record.</h2><p class="lead">Buyers like to see 12–24 months of results <i>after</i> a fix, not just a promise that it's fixed.</p></div>`,
+      notes: "One more thing worth knowing. Buyers like to see 12–24 months of results after a fix, not just a promise that it's fixed. That's why owners who start 12–36 months before they sell are the ones who get paid more. Start late and the fix is still a story. Start now and it's a track record." },
+    { html: `<h2>Here's how we'll raise your exit price in 3 phases</h2><p class="gold" style="font-size:20px">Price it. Plan it. Prove it.</p>
+      <div class="timeline"><div class="bar"><i></i></div><span class="tick" style="left:0">DAY 0</span><span class="tick" style="left:33%">DAY 14</span><span class="tick" style="left:66%">DAY 30</span><span class="tick" style="right:0">DAY 90</span></div>
+      <div class="phases"><div class="phase"><span class="d">DAYS 1–14</span><span class="n">01</span><div class="t">Your Exit Price Today</div></div><div class="phase"><span class="d">DAYS 14–30</span><span class="n">02</span><div class="t">Your Fix Plan</div></div><div class="phase"><span class="d">DAYS 30–90</span><span class="n">03</span><div class="t">Proof + Updated Price</div></div></div>`,
+      notes: "Here's how we'll raise your exit price in 3 phases. Price it, plan it, prove it. [Point to each phase, then move to the next slide for the detail.]" },
+    { html: `<p class="kicker">Phase 1 · Days 1–14</p><h2>Your Exit Price Today</h2>
+      <p><i>Your Exit Price Today is one page. It shows the price range a serious buyer would realistically pay for your business, based on your real profit, and a ranked list of what's pulling that price down right now.</i></p>
+      <p><b>In Phase One</b> you simply give us your numbers and one intake call, and we price your business the way a buyer would.</p><p>By Day 14 you know where you stand, and which issues cost you the most at exit.</p><p><u>That page is yours to keep, whatever you decide next.</u></p>`,
+      notes: "Phase 1 – Your Exit Price Today (Days 1–14). Your Exit Price Today is one page. It shows the price range a serious buyer would realistically pay for your business, based on your real profit, and a ranked list of what's pulling that price down right now. In Phase One you simply give us your numbers and one intake call, and we price your business the way a buyer would. By Day 14 you know where you stand, and which issues cost you the most at exit. That page is yours to keep, whatever you decide next." },
+    { html: `<p class="kicker">Phase 2 · Days 14–30</p><h2>Your Fix Plan + Start</h2>
+      <p><i>This is a short-written plan built from your ranked list. Not 40 items. We look at everything, then focus on the levers that move YOUR price the most, usually 3. Each one gets an order, a person responsible, and a clear finish line a buyer would accept.</i></p>
+      <p><b>In Phase Two</b> we turn your ranked list into the plan and start straight away.</p><p>Names on each fix, deadlines set, and the work moving within a month, not "someday when things calm down."</p>`,
+      notes: "Phase 2 – Your Fix Plan + Start (Days 14–30). This is a short written plan built from your ranked list. Not 40 items. We look at everything, then focus on the levers that move YOUR price the most, usually 3. Each one gets an order, a person responsible, and a clear finish line a buyer would accept. In Phase Two we turn your ranked list into the plan and start straight away. Names on each fix, deadlines set, and the work moving within a month, not \"someday when things calm down.\"" },
+    { html: `<p class="kicker">Phase 3 · Days 30–90</p><h2>Proof + Updated Exit Price</h2>
+      <p><i>This is where the number moves. We finish the top fixes with you, collect the proof a buyer or broker will ask for, and price the business again.</i></p>
+      <p><b>In Phase Three,</b> you or your team do the work; we lead the plan, the sessions, and the proof.</p><p>At Day 90 we redo your page. Your new price sits next to your Day-14 price, on the same profit, with a folder behind every fix. So when a buyer looks, they see proof, not promises.</p>`,
+      notes: "Phase 3 – Proof + Updated Exit Price (Days 30–90). This is where the number moves. We finish the top fixes with you, collect the proof a buyer or broker will ask for, and price the business again. In Phase Three, you or your team do the work; we lead the plan, the sessions, and the proof. At Day 90 we redo your page. Your new price sits next to your Day-14 price, on the same profit, with a folder behind every fix. So when a buyer looks, they see proof, not promises. Quick check: any part of that you want me to go over again?" },
+    { html: `<h2>By saying "YES!" to Raise Your Exit Price Install today, you understand...</h2>
+      <p>That this is done <b>with</b> you. You or your team do the work. We lead the plan, the sessions, and the proof.</p>
+      <p>You also understand that <u>today you're only saying yes to Phase 1</u>. You see your page at Day 14, and then you decide whether to continue.</p>`, notes: "" },
+    { html: `<h2>The Investment</h2><p>If you bought each part from outside, on its own, you'd pay:</p>
+      <div style="max-width:980px"><div class="lineitem"><span>Your Exit Price Today (a business valuation)</span><span>€6,000</span></div><div class="lineitem"><span>Your Fix Plan</span><span>€3,500</span></div><div class="lineitem"><span>Your Updated Exit Price</span><span>€5,500</span></div></div>
+      <div class="row" style="margin-top:34px;align-items:baseline"><span style="font-size:18px">That's</span><span class="stat serif">€15,000</span><span style="font-size:18px">in total.</span></div>`,
+      notes: "If you bought each part from outside, on its own, you'd pay: Your Exit Price Today (a business valuation) €6,000. Your Fix Plan €3,500. Your Updated Exit Price €5,500. That's €15,000 in total. [Pause. Let the number sit before moving on.]" },
+    { html: `<h2>But you won't be investing anywhere near that.</h2>
+      <p>Because it's done with you. Your team follow our direction, so you're not paying for our hours. And it's one process, not three: your Day-14-page feeds straight into the plan and the Day-90 price, so nothing gets done twice.</p>
+      <div style="border-top:1px solid var(--ink);max-width:980px;margin-top:20px;padding-top:26px" class="row"><span style="font-size:18px;font-weight:600">You only invest</span><span class="stat serif">€5,900</span></div>`,
+      notes: "But you're not going to pay anywhere near that. Why? Because it's done with you. Your team follow our direction, so you're not paying for our hours. And it's one process, not three: your Day-14 page feeds straight into the plan and the Day-90 price, so nothing gets done twice. That's why you only invest €5,900 for the full Install." },
+    { html: `<h2>It's functionally free.</h2><p>You're not <i>spending</i> the money. You're <i>parking</i> it, until it comes back at exit.</p>
+      <div class="cards" style="max-width:980px"><div class="card"><p class="kicker">Just 3% higher on ${short(now)}</p><p class="val">+${eur(three)}</p></div><div class="card"><p class="kicker">The whole Install</p><p class="val">€5,900</p></div></div>`,
+      notes: `In fact, it's functionally free once you look at the napkin math. You're not really spending anything. You're parking the money, until it comes back at exit. Here's why: remember the ${short(now)} business? Just a 3% higher end price is ${eur(three)} extra. Across our clients, the average increase in estimated value is about 27%. So 3% would be a poor result for us. The whole Install is €5,900. Even that worst case covers it many times over.` },
+    { html: `<h2>Our Two Promises</h2><p>Both measured on paper, with your own numbers.</p>
+      <div class="cards"><div class="card"><p class="kicker">Promise 1 · Day 14</p><p style="font-size:26px;font-weight:700;line-height:1.3;margin:0">We find at least €50,000 worth fixing, or you get every euro back.</p></div><div class="card"><p class="kicker">Promise 2 · Day 90</p><p style="font-size:26px;font-weight:700;line-height:1.3;margin:0">We raise your end price at least 5%, with proof, or you get €2,250 back.</p></div></div>`,
+      notes: `I'm going to make you two promises. Both measured on paper, with your own numbers. Promise 1, the Day-14 "Worth It" Promise: every cut on your Exit Price Today page shows its math: how much a buyer would take off the multiple for it, times your profit from your own accounts. If those cuts don't add up to at least €50,000 of value we can actually fix, you get every euro back: €900 if you started with the 3-part plan, the full €4,900 if you paid in full. And you keep the page. Promise 2, the Day-90 "5% Higher" Promise: do the agreed work, and your Day-90 price will be at least 5% higher than your Day-14 price, on the same profit, backed by proof. Example: Day 14 at ${short(now)}, Day 90 at least ${short(five)}. If it isn't, we send back your last payment of €2,250. Paid in full? You get €2,250 back too.` },
+    { html: `<h2>And here's how we prove it, so nothing is made up:</h2>
+      <ul><li><b>Same method, same profit.</b> Day 90 is priced exactly the way Day 14 was, on the same profit figure from your accounts.</li><li><b>No proof, no credit.</b> The multiple only goes up for a fix that's backed by evidence in your folder. Things like signed customer contracts, a month of the business running without you, or accounts your accountant has signed off.</li><li><b>You can check every number.</b> You get Day 14 and Day 90 side by side, with the evidence behind each change. Show it to your accountant or broker.</li></ul>`,
+      notes: "(Your Scorecard, the ~20 ways buyers cut value, is yours for showing up today either way.)" },
+    { html: `<h2>We want to make this even sweeter for you.</h2>
+      <div class="cards"><div class="card"><p class="kicker">Option 1 · Pay in 3 parts</p><p class="val" style="font-size:34px">€900 today</p><p class="small" style="margin-top:10px">Instead of €1,400 - <b>Save €500.</b><br><b>Day 30:</b> €2,250 (only if you choose to continue)<br><b>Day 60:</b> €2,250</p></div><div class="card"><p class="kicker">Option 2 · Pay in full</p><p class="val" style="font-size:34px">€4,900 today</p><p class="small" style="margin-top:10px">Instead of €5,900 - <b>Save €1,000.</b><br>No more payments after that.</p></div></div>
+      <p class="small center" style="margin-top:40px;max-width:none">https://buy.stripe.com/aFa8wJ18i4BgcNrfxB2sM02</p>`,
+      notes: "We want to make this even sweeter for you. There are two ways to start. [Walk through both options and what happens next.] Then ask: \"So, which way do you want to start?\" Stop talking and let them answer. When they choose: send the payment link in the chat right away (have both links ready before the call). Say: \"I'll stay on while you do it, takes a minute.\" Once paid: book the intake call together before you hang up. If they need an invoice in the company's name first: send it today with a 24–48h deadline so the on-call price still holds." },
+  ];
+}
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function render() {
+  const deck = document.getElementById("deck");
+  deck.innerHTML = slides().map((s, i) => `<section class="slide">${s.html}<span class="num">${i + 1} / 22</span></section>${s.notes ? `<div class="notes"><b>Notes:</b> ${esc(s.notes)}</div>` : ""}`).join("");
+}
+
+// ---------- controls ----------
+const $ = (id) => document.getElementById(id);
+const bind = (id, key, num) => $(id).addEventListener("input", () => { S[key] = num ? Number($(id).value) || 0 : $(id).value; render(); });
+bind("first", "first"); bind("company", "company"); bind("profit", "profit", true); bind("m1", "m1", true); bind("m2", "m2", true);
+$("print").addEventListener("click", () => window.print());
+$("notesBtn").addEventListener("click", () => document.body.classList.toggle("show-notes"));
+function fill() { $("first").value = S.first; $("company").value = S.company; $("profit").value = S.profit; $("m1").value = S.m1; $("m2").value = S.m2; $("band").textContent = S.band ? `· form: ${S.band}` : ""; render(); }
+fill();
+
+// ---------- Solonos: the lead's form answers in, the PDF out ----------
+const qs = new URLSearchParams(location.search);
+let lead = qs.get("lead"), eng = qs.get("eng");
+const supabase = createClient("https://uirbiqfkgnfnfugfclmu.supabase.co", "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl", { auth: { flowType: "implicit" } });
+const { data: { session } } = await supabase.auth.getSession();
+const status = (t) => { $("status").textContent = t; };
+if (!session) { $("who").textContent = "Sign in to Solonos first, then open this page from a lead."; $("save").disabled = true; }
+
+async function loadLead(id) {
+  const { data: l } = await supabase.from("leads_board").select("ghl_id, name, first_name, company, custom").eq("ghl_id", id).maybeSingle();
+  const { data: c } = await supabase.from("contacts").select("first_name, company, custom").eq("ghl_id", id).maybeSingle();
+  const custom = { ...(l?.custom ?? {}), ...(c?.custom ?? {}) };
+  S.first = c?.first_name || l?.first_name || (l?.name || "").split("|")[0].trim().split(" ")[0] || "";
+  S.company = c?.company || l?.company || "";
+  const bandKey = Object.keys(custom).find((k) => /profit|ebitda/i.test(k) && custom[k]);
+  S.band = bandKey ? String(custom[bandKey]) : "";
+  const p = profitFromBand(S.band);
+  if (p) S.profit = p;
+  $("who").textContent = `Linked to ${l?.name?.split("|")[0].trim() || id}${S.band ? ` · profit band from the form: ${S.band}` : " · no profit band on the form"}`;
+  fill();
+}
+if (session && lead) await loadLead(lead);
+if (session && !lead && !eng) {
+  const pick = $("pick"); pick.style.display = "block";
+  pick.innerHTML = '<option value="">Choose a lead…</option>';
+  const { data: leads } = await supabase.from("leads_board").select("ghl_id, name, company").order("ghl_updated_at", { ascending: false });
+  for (const l of leads ?? []) { const o = document.createElement("option"); o.value = l.ghl_id; o.textContent = l.name.split("|")[0].trim() + (l.company ? " · " + l.company : ""); pick.append(o); }
+  pick.addEventListener("change", async () => { lead = pick.value || null; if (lead) await loadLead(lead); });
+}
+
+async function capture() {
+  const css = document.createElement("style");
+  document.documentElement.classList.add("capture");
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    const pages = [...document.querySelectorAll("#deck .slide")];
+    if (!window.jspdf || !window.html2canvas) throw new Error("PDF libraries did not load; reload the page and try again");
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit: "px", format: [1280, 720], orientation: "landscape", hotfixes: ["px_scaling"] });
+    for (let i = 0; i < pages.length; i++) {
+      const canvas = await window.html2canvas(pages[i], { scale: 1.5, useCORS: true, backgroundColor: "#F6F1E8", width: 1280, height: 720, windowWidth: 1280, scrollX: 0, scrollY: 0 });
+      if (i > 0) pdf.addPage([1280, 720], "landscape");
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.85), "JPEG", 0, 0, 1280, 720);
+      status(`Rendering slide ${i + 1} of ${pages.length}…`);
+    }
+    return pdf.output("blob");
+  } finally { document.documentElement.classList.remove("capture"); css.remove(); }
+}
+
+async function save() {
+  if (!lead && !eng) { status("Pick a lead first"); return; }
+  $("save").disabled = true;
+  try {
+    const blob = await capture();
+    const company = (S.company || S.first || "Install").trim();
+    const name = company + " - Raise Your Exit Price Install";
+    const folder = eng ? eng : ("leads/" + lead);
+    const slug = company.replace(/[^A-Za-z0-9.-]+/g, "-").replace(/^-+|-+$/g, "") || "Install";
+    const path = folder + "/" + Date.now() + "-" + slug + "-Raise-Your-Exit-Price-Install.pdf";
+    status(`Uploading ${(blob.size / 1048576).toFixed(1)} MB…`);
+    const { error } = await supabase.storage.from("deliverables").upload(path, blob, { contentType: "application/pdf" });
+    if (error) throw new Error(error.message);
+    const row = { kind: "exit_price_install", name, storage_path: "deliverables/" + path, uploaded_by: "staff", visibility: eng ? "client" : "internal" };
+    if (eng) row.engagement_id = eng;
+    if (lead) row.opportunity_id = lead;
+    const { error: e2 } = await supabase.from("documents").insert(row);
+    if (e2) throw new Error(e2.message);
+    status(`Saved to Solonos ✓ (${(blob.size / 1048576).toFixed(1)} MB). Close this tab and press Send to client on the lead.`);
+    try { new BroadcastChannel("solonos").postMessage({ type: "builder-saved", lead: lead || null, eng: eng || null }); } catch (_) {}
+  } catch (e) { status("Save failed: " + e.message); }
+  $("save").disabled = false;
+}
+$("save").addEventListener("click", save);
+</script>
+</body>
+</html>
