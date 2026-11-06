@@ -238,7 +238,7 @@ button.step:hover { color: var(--brand); }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.36";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.37";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -561,8 +561,6 @@ function Leads() {
   const [onlyDue, setOnlyDue] = useState(false);
   const [view, setView] = useState(() => { try { return localStorage.getItem("solonos.leadsView") || "list"; } catch (e) { return "list"; } });   // list | board
   const [q, setQ] = useState("");
-  const [tab, setTab] = useState(() => { try { return localStorage.getItem("solonos.leadsTab") || "pipeline"; } catch (e) { return "pipeline"; } });   // pipeline | new
-  const pickTab = (t) => { setTab(t); try { localStorage.setItem("solonos.leadsTab", t); } catch (e) { /* ignore */ } };
   const toast = useToast();
   const pickView = (v) => { setView(v); try { localStorage.setItem("solonos.leadsView", v); } catch (e) { /* ignore */ } };
   const loc = useLocation();
@@ -607,15 +605,9 @@ function Leads() {
 
   const engOf = (l) => engByOpp[l.ghl_id];
   const SENT = ["nda_pending","docs_pending","review_pending","proposal"], ENGAGED = ["engaged","valuation_active","completed"];
-  // GHL's first stage (New Meta Lead) is synced too since 3.35, but lives on its own tab so the pipeline stays clean
-  const isNewStage = (st) => /new meta lead|^new lead/i.test(st?.name ?? "");
-  const newStageIds = stages.filter(isNewStage).map((st) => st.ghl_id);
-  const newLeads = leads.filter((l) => newStageIds.includes(l.stage_id) && !engOf(l));
-  const pipeLeads = leads.filter((l) => !newStageIds.includes(l.stage_id) || engOf(l));
-  const inGhl = pipeLeads.filter((l) => !engOf(l) || engOf(l).stage === "deposit_pending" || engOf(l).stage === "declined");
-  const firstWithLeads = Math.min(...stages.filter((st) => !isNewStage(st) && inGhl.some((l) => l.stage_id === st.ghl_id)).map((st) => st.position), Infinity);
-  const shownStages = stages.filter((st) => !isNewStage(st) && st.position >= firstWithLeads);
-  const repliedStage = stages.find((st) => /replied/i.test(st.name)) ?? stages.filter((st) => !isNewStage(st))[0];
+  const inGhl = leads.filter((l) => !engOf(l) || engOf(l).stage === "deposit_pending" || engOf(l).stage === "declined");
+  const firstWithLeads = Math.min(...stages.filter((st) => inGhl.some((l) => l.stage_id === st.ghl_id)).map((st) => st.position), Infinity);
+  const shownStages = stages.filter((st) => st.position >= firstWithLeads);
   const moveTo = (ghlId, stageId) => run(async () => {
     const lead = leads.find((x) => x.ghl_id === ghlId);
     const from = stages.find((x) => x.ghl_id === lead?.stage_id), to = stages.find((x) => x.ghl_id === stageId);
@@ -651,12 +643,12 @@ function Leads() {
   );
   const allCols = [
     ...shownStages.map((st) => ({ key: st.ghl_id, title: st.name, rows: inGhl.filter((l) => l.stage_id === st.ghl_id), stageId: st.ghl_id })),
-    { key: "__invited", title: "Invited", rows: pipeLeads.filter((l) => engOf(l) && SENT.includes(engOf(l).stage)) },
-    { key: "__engaged", title: "Engaged", rows: pipeLeads.filter((l) => engOf(l) && ENGAGED.includes(engOf(l).stage)) },
+    { key: "__invited", title: "Invited", rows: leads.filter((l) => engOf(l) && SENT.includes(engOf(l).stage)) },
+    { key: "__engaged", title: "Engaged", rows: leads.filter((l) => engOf(l) && ENGAGED.includes(engOf(l).stage)) },
   ];
   const matchesQ = (l) => { const t = q.trim().toLowerCase(); if (!t) return true; const hay = [l.name, l.first_name, l.last_name, l.email, l.phone, l.company, l.stage_name, l.country, l.source, l.lost_reason, engOf(l) ? stageLabel(engOf(l).stage) : "", typeof l.custom === "object" ? JSON.stringify(l.custom) : l.custom].filter(Boolean).join(" ").toLowerCase(); return t.split(/\s+/).every((w) => hay.includes(w)); };
   const cols = applyBoardLayout(allCols, layout).map((c) => ({ ...c, rows: c.rows.filter((l) => (!onlyDue || dueToday[l.ghl_id]) && matchesQ(l)) }));
-  const dueCount = pipeLeads.filter((l) => dueToday[l.ghl_id]).length;
+  const dueCount = leads.filter((l) => dueToday[l.ghl_id]).length;
   const colNames = cols.map((c) => [c.title, c.rows.length]);
   const goCol = (i) => { const c = boardRef.current?.children[i]; if (c) boardRef.current.scrollTo({ left: c.offsetLeft - boardRef.current.offsetLeft, behavior: "smooth" }); };
   const onBoardScroll = () => {
@@ -668,12 +660,6 @@ function Leads() {
   return (
     <>
       <Head lastSync={lastSync} count={leads.length} reload={load} />
-      <div className="tabs" style={{ margin: "0 0 12px" }}>
-        <button className={`tab${tab === "pipeline" ? " on" : ""}`} onClick={() => pickTab("pipeline")}>Pipeline · {pipeLeads.length}</button>
-        <button className={`tab${tab === "new" ? " on" : ""}`} onClick={() => pickTab("new")}>New leads · {newLeads.length}</button>
-      </div>
-      {tab === "new" && <NewLeads rows={newLeads.filter(matchesQ)} q={q} setQ={setQ} onOpen={setOpen} busy={moving} onReplied={(l) => repliedStage && moveTo(l.ghl_id, repliedStage.ghl_id)} repliedName={repliedStage?.name} />}
-      {tab === "pipeline" && <>
       <div className="row between" style={{ marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
         <div className="row" style={{ gap: 6, flex: 1, minWidth: 220 }}>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, company, email, phone, stage…" style={{ flex: 1, maxWidth: 420, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", font: "inherit" }} />
@@ -686,7 +672,7 @@ function Leads() {
           <button className={`btn${view === "board" ? " primary" : ""}`} style={{ borderRadius: "0 8px 8px 0" }} onClick={() => pickView("board")}>Board</button>
         </div>
       </div>
-      {view === "list" && <LeadsList rows={(onlyDue ? pipeLeads.filter((l) => dueToday[l.ghl_id]) : pipeLeads).filter(matchesQ)} engOf={engOf} onOpen={setOpen} />}
+      {view === "list" && <LeadsList rows={(onlyDue ? leads.filter((l) => dueToday[l.ghl_id]) : leads).filter(matchesQ)} engOf={engOf} onOpen={setOpen} />}
       {view === "board" && <>
       <div className="stagetabs">
         {colNames.map(([n, c], i) => <button key={n} className={i === activeCol ? "on" : ""} onClick={() => goCol(i)}>{n} · {c}</button>)}
@@ -695,50 +681,10 @@ function Leads() {
         {cols.map((c) => col(c.title, c.rows, c.stageId))}
       </div>
       </>}
-      </>}
       {open && <LeadDrawer lead={open} engagement={engByOpp[open.ghl_id]} onClose={() => setOpen(null)} reload={load} fu={fuOf(open)}
-        stages={newStageIds.includes(open.stage_id) ? stages.filter((st) => !isNewStage(st)) : shownStages} onMove={(stageId) => { const id = open.ghl_id; setOpen(null); dropTo(id, stageId); }} />}
+        stages={shownStages} onMove={(stageId) => { const id = open.ghl_id; setOpen(null); dropTo(id, stageId); }} />}
       {pendingLost && <LostReasonDialog onPick={lostWithReason} onCancel={() => setPendingLost(null)} />}
     </>
-  );
-}
-
-/** New leads: everyone still in GHL's first stage. The form answers are right there; one button moves them on. */
-function NewLeads({ rows, q, setQ, onOpen, busy, onReplied, repliedName }) {
-  const sorted = [...rows].sort((a, b) => String(b.ghl_created_at ?? "").localeCompare(String(a.ghl_created_at ?? "")));
-  const ans = (l) => { const c = l.custom || {}; const pick = (re) => { const k = Object.keys(c).find((k) => re.test(k)); return k ? String(c[k]) : ""; }; return [pick(/sale process|prompting/i), pick(/^industry$|valuation industry/i), pick(/revenue/i), pick(/profit/i), pick(/concern/i), pick(/invest/i)].filter(Boolean); };
-  return (
-    <div>
-      <div className="row" style={{ gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search new leads…" style={{ flex: 1, maxWidth: 420, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", font: "inherit" }} />
-        <span className="muted small">Straight from the Facebook form, newest first. "Replied" moves the lead to {repliedName || "the pipeline"} in GHL and onto the Pipeline tab.</span>
-      </div>
-      {sorted.length === 0 ? <Empty title="No new leads">Everyone from the form has been moved into the pipeline.</Empty> : (
-        <div className="stack" style={{ gap: 6 }}>
-          {sorted.map((l) => (
-            <div key={l.ghl_id} className="leadrow" onClick={() => onOpen(l)} style={{ borderLeft: "4px solid var(--accent)" }}>
-              <div style={{ minWidth: 0 }}>
-                <div className="row" style={{ gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <span style={{ fontWeight: 700 }}>{l.name.split("|")[0].trim()}</span>
-                  <span className="muted small">{[l.company, l.email, l.phone].filter(Boolean).join(" · ")}</span>
-                </div>
-                <div className="row" style={{ gap: 6, marginTop: 4, flexWrap: "wrap" }}>
-                  {ans(l).map((a, i) => <Chip key={i}>{a}</Chip>)}
-                  {ans(l).length === 0 && <span className="muted small">No form answers yet</span>}
-                </div>
-              </div>
-              <div className="leadrow-right" onClick={(e) => e.stopPropagation()}>
-                <div className="muted small">{l.ghl_created_at ? `came in ${ago(l.ghl_created_at)}` : ""}</div>
-                <div className="row" style={{ gap: 6, marginTop: 4 }}>
-                  <button className="btn primary" disabled={busy} onClick={() => onReplied(l)}>Replied</button>
-                  <button className="btn" onClick={() => onOpen(l)}>Open</button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
 
