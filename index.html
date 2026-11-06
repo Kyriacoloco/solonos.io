@@ -238,7 +238,7 @@ button.step:hover { color: var(--brand); }
 const SUPABASE_URL = "https://uirbiqfkgnfnfugfclmu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_hrhOfXXHVMivsY0rritFKQ_WhQE2TIl";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEybfN1dVcW9utbF";   // Cloudflare Turnstile (empty = no captcha)
-const APP_VERSION = "3.35";   // major = big build, minor = small change; shown bottom-left
+const APP_VERSION = "3.36";   // major = big build, minor = small change; shown bottom-left
 // =====================================================================
 
 import React, { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "https://esm.sh/react@18.3.1";
@@ -728,7 +728,7 @@ function NewLeads({ rows, q, setQ, onOpen, busy, onReplied, repliedName }) {
                 </div>
               </div>
               <div className="leadrow-right" onClick={(e) => e.stopPropagation()}>
-                <div className="muted small">{l.ghl_created_at ? `in ${ago(l.ghl_created_at)}` : ""}</div>
+                <div className="muted small">{l.ghl_created_at ? `came in ${ago(l.ghl_created_at)}` : ""}</div>
                 <div className="row" style={{ gap: 6, marginTop: 4 }}>
                   <button className="btn primary" disabled={busy} onClick={() => onReplied(l)}>Replied</button>
                   <button className="btn" onClick={() => onOpen(l)}>Open</button>
