@@ -7,6 +7,7 @@
 //   new action "note" adds a note to the GHL contact, and the secret header may call move/note (used by engagement-send).
 // Name the function exactly:  ghl-sync   and turn OFF 'Verify JWT'.
 // Secrets: GHL_TOKEN, GHL_LOCATION_ID, GHL_SYNC_SECRET, GHL_PIPELINE, GHL_FROM_STAGE
+// Version 1.5 (6 Nov 2026): every stage of the pipeline is mirrored, New Meta Lead included (set GHL_ALL_STAGES=no to go back to GHL_FROM_STAGE).
 // Token scopes: View Contacts, View Opportunities, View Locations, View Custom Fields
 
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -253,7 +254,7 @@ async function fullPull(db: Db) {
   const opps = (await ghl.searchOpportunities("open")).filter((o) => stageAllowed(o.pipelineStageId, pipeline.stages));
   for (const o of opps) await upsertOpportunity(db, o);
   await loadFieldNames(db);
-  return { pipeline: pipeline.name, stages: pipeline.stages.length, opportunities: opps.length, custom_fields: Object.keys(fieldNames ?? {}).length, from_stage: fromStage() || null, only_stages: onlyStages() };
+  return { pipeline: pipeline.name, stages: pipeline.stages.length, opportunities: opps.length, custom_fields: Object.keys(fieldNames ?? {}).length, all_stages: (Deno.env.get("GHL_ALL_STAGES") ?? "yes").toLowerCase() !== "no", from_stage: fromStage() || null, only_stages: onlyStages() };
 }
 
 /**
@@ -268,6 +269,7 @@ function onlyStages(): string[] {
 function fromStage(): string { return (Deno.env.get("GHL_FROM_STAGE") ?? "").trim().toLowerCase(); }
 function stageAllowed(stageId: string | undefined, stages: GhlStage[]): boolean {
   const stage = stages.find((s) => s.id === stageId);
+  if ((Deno.env.get("GHL_ALL_STAGES") ?? "yes").toLowerCase() !== "no") return !!stage;   // 1.5: every stage comes in (the app shows New Meta Lead on its own tab)
   const from = fromStage();
   if (from) {
     const start = stages.find((s) => s.name.toLowerCase() === from);
